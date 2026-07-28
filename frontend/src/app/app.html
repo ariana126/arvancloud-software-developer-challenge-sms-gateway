@@ -1,0 +1,13 @@
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<app-site-header />
+
+<!-- tabindex="-1" makes this focusable programmatically only; the route announcer moves focus here
+     after a navigation. `no-positive-tabindex` bans positive values, not this one. -->
+<main id="main-content" tabindex="-1">
+  <router-outlet />
+</main>
+
+<!-- A router navigation swaps the page without telling a screen reader anything, and can leave
+     focus on a control that no longer exists. This region is what announces the new page. -->
+<p class="visually-hidden" role="status">{{ routeAnnouncement() }}</p>

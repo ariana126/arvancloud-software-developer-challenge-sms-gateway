@@ -1,0 +1,10 @@
+node_modules
+dist
+.angular
+coverage
+a11y/report
+a11y/.output
+.git
+.env
+.env.test
+*.log

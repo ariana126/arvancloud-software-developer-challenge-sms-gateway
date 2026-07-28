@@ -1,0 +1,68 @@
+name: nmk-frontend
+
+services:
+  app:
+    build: .
+    init: true
+    ports:
+      - '${APP_PORT:-4200}:4200'
+    env_file:
+      - .env
+    # The backend is a separate Compose project on its own network, so there is no service name
+    # to resolve — it is reachable only through the ports it publishes on the host. This maps
+    # that host to a name the dev-server proxy can target (see proxy.conf.mjs). The acceptance
+    # suite solves the same problem with network_mode: host, which is not open to us: two
+    # stacks have to publish two different ports.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      # The Angular build cache, kept out of the bind mount. Both stacks mount the same working
+      # tree, and two Vite dev servers sharing one dependency-optimizer cache directory would
+      # race; an anonymous volume per Compose project gives each its own. It also stops the
+      # cache landing on the host root-owned, since the container runs as root.
+      - /app/.angular
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:4200').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # The accessibility audit — axe-core in a real Chromium, driven by Playwright against the
+  # dev server. A profile keeps it out of `make up`: it is a one-shot check, not part of the
+  # stack. `docker compose run` enables a target service's own profile, so `make
+  # lint-accessibility` still reaches it.
+  a11y:
+    build:
+      context: .
+      dockerfile: Dockerfile.a11y
+      args:
+        # Empty unless .env sets it; see the comment on the matching ARG in Dockerfile.a11y.
+        PLAYWRIGHT_DOWNLOAD_HOST: ${PLAYWRIGHT_DOWNLOAD_HOST:-}
+    profiles:
+      - a11y
+    init: true
+    depends_on:
+      app:
+        condition: service_healthy
+    # Share the dev server's network namespace so the browser reaches it on localhost. Going
+    # through the service name instead would break twice over: Chromium force-upgrades
+    # http://app/ to HTTPS, because `.app` is an HSTS-preloaded TLD and this service is named
+    # `app` (the symptom is a mystifying ERR_SSL_PROTOCOL_ERROR), and Vite's DNS-rebinding
+    # defence 403s any Host it does not recognise. localhost is exempt from both, so the audit
+    # needs no `allowedHosts` entry and no second name for the server.
+    network_mode: service:app
+    environment:
+      # The internal port — never ${APP_PORT}, which is only the host's side of the mapping.
+      A11Y_BASE_URL: http://localhost:4200
+    volumes:
+      - ./:/app
+      - /app/node_modules

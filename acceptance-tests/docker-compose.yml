@@ -1,0 +1,16 @@
+name: nmk-acceptance-tests
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Empty unless .env overrides it — see the Dockerfile and .env.example.
+        PLAYWRIGHT_DOWNLOAD_HOST: ${PLAYWRIGHT_DOWNLOAD_HOST:-}
+    init: true
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+      - /app/node_modules
