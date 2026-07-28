@@ -7,5 +7,6 @@ module.exports = {
         ],
         requireModule: ['ts-node/register'],
         format: ['@serenity-js/cucumber'],
+        strict: false,
     },
 };
