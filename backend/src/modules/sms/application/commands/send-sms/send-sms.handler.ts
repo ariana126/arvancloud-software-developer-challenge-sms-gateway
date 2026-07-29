@@ -20,16 +20,23 @@ export class SendSmsHandler implements ICommandHandler<SendSmsCommand> {
   ) {}
 
   /**
-   * Returns the new message's id and what it cost. A command handler returning
-   * a value is a deliberate CQS deviation, and the same one `LoginHandler`
-   * already makes: the id is minted inside `SmsMessage.send`, so no follow-up
-   * query could name the row that was just written. The alternative — having
-   * the controller read `SmsTariff.flat()` itself — would still not solve the
-   * id, and would put a second reader on the price.
+   * Returns the new message's id, what it cost, and — for an express send only —
+   * the instant it is guaranteed to reach the operator. A command handler
+   * returning a value is a deliberate CQS deviation, and the same one
+   * `LoginHandler` already makes: the id is minted inside `SmsMessage.send`, so
+   * no follow-up query could name the row that was just written. The
+   * alternative — having the controller read `SmsTariff.flat()` itself — would
+   * still not solve the id, and would put a second reader on the price.
+   *
+   * `guaranteedDeliveryAt` is **absent**, not null, when the service level
+   * promises nothing: a standard send makes no claim about when the message
+   * arrives, and a null would read as a claim that the answer is unknown.
    */
-  async execute(
-    command: SendSmsCommand,
-  ): Promise<{ id: string; cost: number }> {
+  async execute(command: SendSmsCommand): Promise<{
+    id: string;
+    cost: number;
+    guaranteedDeliveryAt?: string;
+  }> {
     const tariff = SmsTariff.flat();
 
     // Ordering: charge, then dispatch, then record. Charging first is what makes
@@ -54,11 +61,23 @@ export class SendSmsHandler implements ICommandHandler<SendSmsCommand> {
       command.senderId,
       command.recipient,
       command.body,
+      command.serviceLevel,
       this.clock.now(),
     );
     await this.smsMessageRepository.save(message);
 
-    return { id: message.id.asString(), cost: tariff.costPerSms() };
+    // Rendered as ISO-8601 here for the same reason `id` is rendered as a string:
+    // this shape leaves the application layer, so it carries wire types rather
+    // than domain ones.
+    const guaranteedDeliveryAt = message.guaranteedDeliveryAt();
+
+    return {
+      id: message.id.asString(),
+      cost: tariff.costPerSms(),
+      ...(guaranteedDeliveryAt
+        ? { guaranteedDeliveryAt: guaranteedDeliveryAt.toISOString() }
+        : {}),
+    };
   }
 
   /**

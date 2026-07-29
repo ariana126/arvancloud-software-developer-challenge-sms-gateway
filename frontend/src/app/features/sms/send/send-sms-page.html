@@ -23,9 +23,27 @@
     }
   </div>
 
+  <!--
+    The first sentence is a contract with the acceptance suite: it may be appended to, never reworded.
+    The guarantee is a second sentence rather than a clause inside it for that reason alone.
+
+    The instant is published twice over — as text a person reads and as the `datetime` attribute
+    anything mechanical reads. That is what makes the human half free: the format below can change to
+    suit the page without touching what the suite parses. Exactly one <time> ever renders, and a
+    standard send renders neither it nor the sentence around it, because a standard send promises no
+    time at all.
+  -->
   <div class="alert alert--notice" role="status" id="send-sms-status">
     @if (sentTo() !== '') {
       <span>Your SMS has been sent to {{ sentTo() }}</span>
+    }
+
+    @if (guaranteedByText() !== '') {
+      <span>
+        Express delivery: it will reach the operator by
+        <time [attr.datetime]="guaranteedBy()">{{ guaranteedByText() }}</time
+        >.
+      </span>
     }
   </div>
 
@@ -50,6 +68,18 @@
     label="Message"
     autocomplete="off"
     hint="Up to 160 characters."
+  />
+
+  <!--
+    An option about *how* to send, so it sits after the two fields that say what to send and beside
+    the price and the button it affects. No `required` rule backs it — see the schema in the component
+    for why a checkbox is the one field where that would break the submit outright.
+  -->
+  <app-checkbox-field
+    [field]="f.express"
+    name="express"
+    label="Express delivery"
+    hint="Adds a guaranteed delivery time to the confirmation."
   />
 
   @if (priceHint() !== '') {

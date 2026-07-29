@@ -13,6 +13,17 @@ const VALID = { recipient: '09121234567', message: 'Your order has shipped.' };
 const SENT_CONFIRMATION = 'Your SMS has been sent to 09121234567';
 const NOT_ENOUGH_CREDIT = 'You do not have enough credit to send this SMS';
 
+/**
+ * The phrase the acceptance suite reads the guarantee by, and the instant the API promises with it.
+ * Both are a contract with QA: the sentence above may be appended to but never reworded, and the
+ * suite parses the `datetime` attribute rather than the rendered text — which is what leaves the
+ * human formatting free to change without breaking anything.
+ */
+const GUARANTEE_PHRASE = 'reach the operator by';
+const GUARANTEED_AT = '2026-01-01T00:05:00.000Z';
+
+const CREATED = { status: 201, statusText: 'Created' };
+
 describe('SendSmsPage', () => {
   let httpMock: HttpTestingController;
   let router: Router;
@@ -100,6 +111,25 @@ describe('SendSmsPage', () => {
     await submitForm(page);
 
     return page;
+  }
+
+  /** Ticking the box is a click, not a value assignment — the checkbox reads `checked`. */
+  async function tickExpress(page: HTMLElement): Promise<void> {
+    control(page, 'express').click();
+    await harness.fixture.whenStable();
+  }
+
+  async function sendExpress(): Promise<HTMLElement> {
+    const page = await openPage();
+    await fillIn(page, VALID);
+    await tickExpress(page);
+    await submitForm(page);
+
+    return page;
+  }
+
+  function publishedTimes(page: HTMLElement): NodeListOf<HTMLElement> {
+    return page.querySelectorAll<HTMLElement>('form [role="status"] time');
   }
 
   /** The text of the element(s) the control's aria-describedby points at. */
@@ -225,12 +255,12 @@ describe('SendSmsPage', () => {
   });
 
   describe('a message that goes through', () => {
-    it('posts exactly the two fields the API accepts', async () => {
+    it('posts what the user typed, at the level the unticked box means', async () => {
       await sendWith();
 
       const request = httpMock.expectOne('/api/sms');
       expect(request.request.method).toBe('POST');
-      expect(request.request.body).toEqual(VALID);
+      expect(request.request.body).toEqual({ ...VALID, serviceLevel: 'STANDARD' });
 
       request.flush({ id: 'an-id', cost: 1000 }, { status: 201, statusText: 'Created' });
       await settle();
@@ -272,6 +302,121 @@ describe('SendSmsPage', () => {
       // A stale success beside a failing attempt would be the worst of both.
       expect(statusText(page)).toBe('');
       httpMock.expectOne('/api/sms').flush(null, { status: 201, statusText: 'Created' });
+      await settle();
+    });
+  });
+
+  describe('express delivery', () => {
+    it('offers it through the shared checkbox field, unticked', async () => {
+      const page = await openPage();
+
+      // Rendered through app-checkbox-field, like every other field on this form is rendered through
+      // its wrapper: that is where the label pairing and the error markup are wired.
+      expect(page.querySelector('form app-checkbox-field')).not.toBeNull();
+      expect(control(page, 'express').type).toBe('checkbox');
+      expect(control(page, 'express').checked).toBe(false);
+      expect(page.querySelector('label[for="express"]')!.textContent!.trim()).toBe(
+        'Express delivery',
+      );
+    });
+
+    it('leaves the box free of a required attribute, so an unticked one cannot block the submit', async () => {
+      // `required()` on this field would make [formField] write a real `required` attribute, and the
+      // browser would then refuse to submit until the box was ticked. Express is opt-in. jsdom runs
+      // no constraint validation, so only the absent attribute can stand in for that here.
+      expect(control(await openPage(), 'express').hasAttribute('required')).toBe(false);
+    });
+
+    it('asks for the express level when the box is ticked', async () => {
+      await sendExpress();
+
+      const request = httpMock.expectOne('/api/sms');
+      expect(request.request.body).toEqual({ ...VALID, serviceLevel: 'EXPRESS' });
+
+      request.flush({ id: 'an-id', cost: 1000, guaranteedDeliveryAt: GUARANTEED_AT }, CREATED);
+      await settle();
+    });
+
+    it('keeps the sentence QA reads and appends the guarantee to it', async () => {
+      const page = await sendExpress();
+
+      httpMock
+        .expectOne('/api/sms')
+        .flush({ id: 'an-id', cost: 1000, guaranteedDeliveryAt: GUARANTEED_AT }, CREATED);
+      await settle();
+
+      expect(statusText(page)).toContain(SENT_CONFIRMATION);
+      expect(statusText(page)).toContain(GUARANTEE_PHRASE);
+    });
+
+    it('publishes the instant as a single machine-readable time', async () => {
+      const page = await sendExpress();
+
+      httpMock
+        .expectOne('/api/sms')
+        .flush({ id: 'an-id', cost: 1000, guaranteedDeliveryAt: GUARANTEED_AT }, CREATED);
+      await settle();
+
+      // One <time>, so "the guarantee" is never ambiguous, and its datetime is the full instant the
+      // API returned — offset intact, because it is that string and not a re-serialised copy.
+      expect(publishedTimes(page)).toHaveLength(1);
+      expect(publishedTimes(page)[0].getAttribute('datetime')).toBe(GUARANTEED_AT);
+      expect(publishedTimes(page)[0].textContent!.trim()).not.toBe('');
+    });
+
+    it('promises nothing at all when the send was standard', async () => {
+      const page = await sendWith();
+
+      httpMock.expectOne('/api/sms').flush({ id: 'an-id', cost: 1000 }, CREATED);
+      await settle();
+
+      expect(publishedTimes(page)).toHaveLength(0);
+      expect(statusText(page)).not.toContain(GUARANTEE_PHRASE);
+      expect(statusText(page)).toBe(SENT_CONFIRMATION);
+    });
+
+    it('unticks the box with the rest of the form, so the next message is standard again', async () => {
+      const page = await sendExpress();
+
+      httpMock
+        .expectOne('/api/sms')
+        .flush({ id: 'an-id', cost: 1000, guaranteedDeliveryAt: GUARANTEED_AT }, CREATED);
+      await settle();
+
+      // Express is a per-message choice, and a box left ticked spends the next message's premium
+      // without being asked.
+      expect(control(page, 'express').checked).toBe(false);
+    });
+
+    it('leaves the box ticked when the send failed, so a retry is still express', async () => {
+      const page = await sendExpress();
+
+      httpMock
+        .expectOne('/api/sms')
+        .flush(
+          { type: PROBLEM.insufficientCredit },
+          { status: 402, statusText: 'Payment Required' },
+        );
+      await settle();
+
+      expect(control(page, 'express').checked).toBe(true);
+    });
+
+    it('drops a previous guarantee as soon as the next attempt begins', async () => {
+      const page = await sendExpress();
+
+      httpMock
+        .expectOne('/api/sms')
+        .flush({ id: 'an-id', cost: 1000, guaranteedDeliveryAt: GUARANTEED_AT }, CREATED);
+      await settle();
+      expect(publishedTimes(page)).toHaveLength(1);
+
+      await fillIn(page, VALID);
+      await submitForm(page);
+
+      // A promise from the last message must not hang over this one.
+      expect(publishedTimes(page)).toHaveLength(0);
+      httpMock.expectOne('/api/sms').flush(null, CREATED);
       await settle();
     });
   });

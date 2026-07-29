@@ -30,6 +30,14 @@ export interface AccountNotes {
 
   /** What the actor sent, so the confirmation can be checked against the recipient they typed. */
   sms: SmsDetails;
+
+  /**
+   * The instant, as an ISO-8601 string, that the backend clock was frozen at for a send — so an
+   * assertion about a *future* guarantee has something in the system's own timeline to compare
+   * against. The host's wall clock is no use here: the backend starts every scenario frozen in the
+   * past, so "later than now" would be measured against the wrong calendar entirely.
+   */
+  sentAt: string;
 }
 
 export const TheDetailsTheySignedUpWith = (): QuestionAdapter<SignUpPayload> =>

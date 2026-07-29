@@ -1,9 +1,26 @@
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom, map, Observable } from 'rxjs';
 
-import { SendSmsDto } from '../../api/model';
+import { SendSmsDto, SendSmsDtoServiceLevel } from '../../api/model';
 import { SmsService } from '../../api/sms/sms.service';
 import { SmsPricing, toSmsPricing } from './sms-pricing';
+import { SmsReceipt, toSmsReceipt } from './sms-receipt';
+
+/**
+ * A message the app has been asked to send.
+ *
+ * `express` is a boolean because that is what the choice is — a ticked box — and because the wire's
+ * vocabulary for it (`'STANDARD' | 'EXPRESS'`) is a detail of the contract. Translating the one into
+ * the other is this gateway's job, so no page ever holds a wire literal and none of them imports
+ * from `api/`: every such import in this app is in `core/`, and keeping it that way is what lets the
+ * contract's naming change without a page noticing.
+ */
+export interface SmsToSend {
+  readonly recipient: string;
+  readonly message: string;
+  /** Express delivery is opt-in. `false` is an ordinary send, and the default everywhere. */
+  readonly express: boolean;
+}
 
 /**
  * The app's one way in and out of the SMS API.
@@ -16,30 +33,46 @@ import { SmsPricing, toSmsPricing } from './sms-pricing';
  * contract, so `accessTokenInterceptor` attaches the token and the two opt-out call sites in
  * `IdentityGateway` remain the only ones in the app.
  *
- * Taking `SendSmsDto` (the generated type) is deliberate, for the same reason `IdentityGateway`
- * takes its DTOs: the backend's validation pipe runs `forbidNonWhitelisted`, so a single stray
- * property is a 400, and typing the parameter as the DTO makes the compiler the thing that prevents
- * it rather than a stripping step someone has to remember.
+ * `sendSms` takes `SmsToSend` rather than the generated `SendSmsDto`, which is a deliberate departure
+ * from how `IdentityGateway` takes its DTOs straight through. The reason that pattern exists —
+ * `forbidNonWhitelisted` makes one stray property a 400, so let the compiler prevent it — is
+ * unchanged and still holds here: the DTO is built as a `SendSmsDto` literal inside `sendSms`, so the
+ * compiler still checks every property against the contract, one layer in. What the extra layer buys
+ * is that the boolean-to-level translation happens once, in the place that already knows the wire.
  */
 @Injectable({ providedIn: 'root' })
 export class SmsGateway {
   private readonly sms = inject(SmsService);
 
   /**
-   * Resolves when the message has been accepted and charged, and rejects otherwise — the caller maps
+   * Resolves with what the API promised about the message, and rejects otherwise — the caller maps
    * the rejection onto its form.
    *
-   * The 201 carries an `id` and a `cost`, and both are discarded: the page's confirmation names the
-   * recipient the user typed and quotes no amount, so returning them would be an unread value. If a
-   * "1,000 RIALS charged" line is ever wanted, this returns the pair normalised the way
-   * `toSmsPricing` normalises the price, and nothing else about the slice changes.
+   * `serviceLevel` is always named, never omitted. The contract makes it optional and applies
+   * `STANDARD` server-side when a request says nothing, so sending it is not required — but a request
+   * that states its own intent cannot have its meaning changed by a change of server default, and
+   * `'STANDARD'` is a value the contract's enum already lists, so it costs nothing to say.
+   *
+   * The 201's `id` and `cost` are still discarded: the page's confirmation names the recipient the
+   * user typed and quotes no amount, so returning them would be an unread value. `guaranteedDeliveryAt`
+   * is not, because the confirmation now says when the message will arrive.
    */
-  async sendSms(details: SendSmsDto): Promise<void> {
-    await firstValueFrom(this.sms.smsControllerSend(details), {
+  async sendSms(details: SmsToSend): Promise<SmsReceipt> {
+    const dto: SendSmsDto = {
+      recipient: details.recipient,
+      message: details.message,
+      serviceLevel: details.express
+        ? SendSmsDtoServiceLevel.EXPRESS
+        : SendSmsDtoServiceLevel.STANDARD,
+    };
+
+    const created = await firstValueFrom(this.sms.smsControllerSend(dto), {
       // A response that completes without emitting would otherwise reject with `EmptyError`, turning
-      // a success into a thrown error. Nothing here reads the value, so there is nothing to lose.
+      // a success into a thrown error. `toSmsReceipt` takes that `undefined` as "promised nothing".
       defaultValue: undefined,
     });
+
+    return toSmsReceipt(created);
   }
 
   pricing(): Observable<SmsPricing> {

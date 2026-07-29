@@ -3,6 +3,7 @@ import { SmsMessage as PrismaSmsMessage } from '@prisma/client';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
 import { MessageBody } from '@sms/domain/value/message-body';
 import { PhoneNumber } from '@sms/domain/value/phone-number';
+import { ServiceLevel } from '@sms/domain/value/service-level';
 import { SmsStatus } from '@sms/domain/value/sms-status';
 
 export class SmsMessageMapper {
@@ -17,6 +18,11 @@ export class SmsMessageMapper {
       // domain type and reading `record.status` here — until then, a factory
       // that could only ever return one value would be dead code.
       SmsStatus.sent(),
+      // Read back, unlike the status: there really are two service levels, and
+      // which one a message was sent at is not recoverable from anything else.
+      // There is no stored delivery guarantee to read — `ServiceLevel` derives
+      // it from `sentAt`, so the express window lives in exactly one place.
+      ServiceLevel.fromString(record.serviceLevel),
       record.sentAt,
     );
   }

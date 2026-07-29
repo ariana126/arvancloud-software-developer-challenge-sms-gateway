@@ -1,10 +1,15 @@
 model SmsMessage {
-  id        String   @id @default(uuid())
-  senderId  String   @map("sender_id")
-  recipient String
-  body      String
-  status    String
-  sentAt    DateTime @db.Timestamptz(3) @map("sent_at")
+  id           String   @id @default(uuid())
+  senderId     String   @map("sender_id")
+  recipient    String
+  body         String
+  status       String
+  // The default backfills rows written before express existed; the domain always
+  // supplies a level explicitly. There is deliberately no guaranteed-delivery
+  // column — that instant is derived from `sentAt` by `ServiceLevel`, and a
+  // stored copy would be a second home for the express window, free to disagree.
+  serviceLevel String   @default("STANDARD") @map("service_level")
+  sentAt       DateTime @map("sent_at") @db.Timestamptz(3)
 
   @@map("sms_message")
 }

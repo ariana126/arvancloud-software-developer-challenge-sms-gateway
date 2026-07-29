@@ -7,6 +7,7 @@ import { SmsProvider } from '@sms/domain/service/sms-provider';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
 import { MessageBody } from '@sms/domain/value/message-body';
 import { PhoneNumber } from '@sms/domain/value/phone-number';
+import { ServiceLevel } from '@sms/domain/value/service-level';
 
 import { SendSmsCommand } from './send-sms.command';
 import { SendSmsHandler } from './send-sms.handler';
@@ -103,12 +104,20 @@ function makeSut(
   };
 }
 
-function commandFrom(senderId: Identity): SendSmsCommand {
+function commandFrom(
+  senderId: Identity,
+  serviceLevel: ServiceLevel = ServiceLevel.standard(),
+): SendSmsCommand {
   return new SendSmsCommand(
     senderId,
     PhoneNumber.fromString(RECIPIENT),
     MessageBody.fromString(BODY),
+    serviceLevel,
   );
+}
+
+function expressCommand(): SendSmsCommand {
+  return commandFrom(Identity.new(), ServiceLevel.express());
 }
 
 function shortOn(available: number): FakeCreditLedger {
@@ -164,6 +173,49 @@ describe('SendSmsHandler', () => {
       id: repository.saved[0].id.asString(),
       cost: COST_PER_SMS,
     });
+  });
+
+  it('an express send answers with the instant it is guaranteed to reach the operator', async () => {
+    const { sut, repository } = makeSut();
+
+    const result = await sut.execute(expressCommand());
+
+    expect(result).toEqual({
+      id: repository.saved[0].id.asString(),
+      cost: COST_PER_SMS,
+      guaranteedDeliveryAt: '2026-01-01T00:05:00.000Z',
+    });
+  });
+
+  // Absent, not null: the key is missing from the answer entirely, which is what
+  // "a standard send promises nothing" looks like on the wire.
+  it('a standard send answers with no guarantee at all', async () => {
+    const { sut } = makeSut();
+
+    const result = await sut.execute(commandFrom(Identity.new()));
+
+    expect(result).not.toHaveProperty('guaranteedDeliveryAt');
+  });
+
+  it('the recorded message keeps the service level it was sent at', async () => {
+    const { sut, repository } = makeSut();
+
+    await sut.execute(expressCommand());
+
+    expect(repository.saved[0].toPrimitives()).toMatchObject({
+      serviceLevel: 'EXPRESS',
+    });
+  });
+
+  it('an express send is charged the same flat tariff as a standard one', async () => {
+    const senderId = Identity.new();
+    const { sut, ledger } = makeSut();
+
+    await sut.execute(commandFrom(senderId, ServiceLevel.express()));
+
+    expect(ledger.charges).toEqual([
+      { userId: senderId.asString(), amount: COST_PER_SMS },
+    ]);
   });
 
   it('a balance too short for one message dispatches nothing', async () => {

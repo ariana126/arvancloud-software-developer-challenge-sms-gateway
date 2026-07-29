@@ -23,3 +23,23 @@ h1 {
 #send-sms-price {
   margin-bottom: calc(var(--space-2) - var(--space-5));
 }
+
+/*
+ * The confirmation is two sentences after an express send. `.alert` lays its children out in a row,
+ * which is right for the icon-and-message shape it was written for and wrong for two sentences, so
+ * this one stacks them. The tighter gap keeps them reading as one confirmation rather than two
+ * unrelated notices.
+ */
+#send-sms-status {
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/*
+ * A time is one value, so it must not break across two lines. Left alone the banner wrapped a
+ * 12-hour time between its minutes and its meridiem — "by 12:05" on one line and "AM." on the next,
+ * which reads as two things. Only a real browser shows this; there is no line wrapping in jsdom.
+ */
+#send-sms-status time {
+  white-space: nowrap;
+}

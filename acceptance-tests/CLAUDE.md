@@ -33,16 +33,20 @@ Start them with `make -C ../backend test-up` and `make -C ../frontend test-up`, 
 ## Which door a step goes through
 
 The suite is **blended** (BDD in Action, ch15): the browser where the browser is the point, HTTP
-everywhere else. Two of the seventeen examples drive the UI. That ratio is deliberate, not a
+everywhere else. Six of the twenty-four examples drive the UI. That ratio is deliberate, not a
 staging post — ch10 puts UI tests at "a small minority" of an acceptance suite.
 
 | Scenario                     | Door                       | Why                                                                                                       |
 | ---------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Successful sign-up           | **UI**                     | ch10 reason 1: the key user journey, and the only one this suite has                                       |
+| Successful sign-up           | **UI**                     | ch10 reason 1: a key user journey                                                                          |
 | Already registered email     | `Given` **API**, rest **UI** | ch10 reason 3: screen-specific logic — a `409` is only worth something if the visitor is *told*, beside the offending field |
 | Weak password (×6)           | **API**                    | ch10: proving a password rule through a form "would be wasteful"                                            |
 | Invalid email (×5)           | **API**                    | ch10's canonical waste case                                                                                 |
 | Missing data (×4)            | **API**                    | The form never submits an empty required field, so a UI version would document a *different* rule           |
+| Send SMS (×3)                | **UI**                     | ch10 reason 1: the journey this product exists for. Includes the insufficient-credit rejection, because the rule is about what the sender is *told* |
+| Send express SMS             | **UI**                     | ch10 reason 3: the guaranteed delivery time is only worth something if it is *shown*                        |
+| Increase account credit      | **API**                    | Passive throughout; no screen-specific rule to demonstrate                                                  |
+| Sent SMS report (×2)         | **API**                    | Currently pending — no automation yet                                                                       |
 
 **Grammatical voice is the signal.** `Given Ariana already has an account` is passive — we care only
 *that* it is true, so it takes the API. `When he signs up` is active — we are demonstrating *how*,
@@ -155,10 +159,23 @@ support/
 cucumber.cjs                            # loads support/ + step-definitions/ via ts-node
 ```
 
-`screenplay/common/clock.ts` is the one entry above that describes intent rather than current
-behaviour: `FreezeTimeAt` and `LetTimePass` are written but have **no call site**. The clock the
-suite actually uses is reset in `support/hooks.ts` by raw `fetch`. Wire these two up when a scenario
-needs to move time, or delete them — don't assume they are exercised.
+`screenplay/common/clock.ts` now has exactly one call site, and it matters where. `FreezeTimeAt` is
+called by `SendAnSms.using` — **express sends only** — where it must be the **first** activity,
+before `LocateTheSendSmsForm` logs the actor in. `JwtAuthGuard` verifies tokens against the same
+injected clock with a one-hour life, so jumping the clock forward *after* a login invalidates the
+session mid-scenario. Don't reorder it; the activity list carries a comment saying so.
+
+Why a send fixes the clock at all: the express confirmation promises a *future* instant, and the only
+honest thing to compare it against is the backend's own timeline. The host's wall clock sits months
+ahead of the instant `POST /api/testing/clock/reset` leaves the backend at, so a perfectly correct
+guarantee would look past. `theMomentScenariosFreezeTimeAt` in that file is deliberately **not** the
+backend's default reset instant, so a freeze that silently fails to take goes red instead of passing
+by coincidence — and `FreezeTimeAt` asserts `204` for the same reason, since `Send.a()` asserts
+nothing of its own.
+
+`LetTimePass` remains **unwired**, with no call site. Wire it up when a scenario needs to move time,
+or delete it — don't assume it is exercised, and give it the same status assertion when it gets one.
+The per-scenario reset in `support/hooks.ts` stays a raw `fetch`, per the hook convention above.
 
 The three layers of `handbook:screenplay-guideline` map onto that tree: `specs/` is the
 **Specification** layer, `screenplay/` minus `ui/` is the **Domain** layer, and `screenplay/ui/`
@@ -178,11 +195,15 @@ contract that something else keeps honest. That is why `Form.inputFor('Email add
 idiom here and `By.css('#email')` is not.
 
 **Know where that safety net ends.** Reaching an accessible name still means anchoring on some
-structure first, and those anchors are ungated: `form app-text-field`, `form button`,
-`form [role="alert"]`, `.field__error`, `dl div`, `app-site-header button|a`. Two of them are
-*provably* unprotected — the accessibility audit visits each route in its initial state and says so
-explicitly, so a form's error state is graded by nothing. Rename the `field__error` class or drop
-the `app-text-field` wrapper and this suite breaks with no check failing first.
+structure first, and those anchors are ungated: `form app-text-field`, `form app-checkbox-field`,
+`form button`, `form [role="alert"]`, `form [role="status"]`, `form [role="status"] time`,
+`.field__error`, `dl div`, `app-site-header button|a`. Several are *provably* unprotected — the
+accessibility audit visits each route in its initial state and says so explicitly, so neither a
+form's error state nor its confirmation state is graded by anything. Rename the `field__error`
+class, drop the `app-text-field` or `app-checkbox-field` wrapper, or replace the `<time>` in the
+confirmation banner, and this suite breaks with no check failing first. Two further ungated details
+of the same kind: the `<time>` element's `datetime` attribute must stay a full ISO-8601 instant, and
+the confirmation copy must keep the phrase `reach the operator by`.
 
 Keep those selectors few, keep them in `screenplay/ui/`, and when one breaks, remember the fix is a
 frontend conversation rather than a new `data-test` attribute here.

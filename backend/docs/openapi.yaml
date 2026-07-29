@@ -346,7 +346,10 @@ paths:
               $ref: '#/components/schemas/SendSmsDto'
       responses:
         '201':
-          description: Message sent and charged
+          description: >-
+            Message sent and charged. `guaranteedDeliveryAt` is present only for
+            an express send — a standard send promises no delivery time, so the
+            field is absent rather than null.
           content:
             application/json:
               schema:
@@ -357,6 +360,16 @@ paths:
                   cost:
                     type: number
                     example: 1000
+                  guaranteedDeliveryAt:
+                    type: string
+                    format: date-time
+                    description: >-
+                      The instant by which an express message is guaranteed to
+                      reach the operator. Omitted for a standard send.
+                    example: '2026-01-01T00:05:00.000Z'
+                required:
+                  - id
+                  - cost
         '400':
           description: ''
           content:
@@ -571,6 +584,34 @@ components:
             with it.
           maxLength: 160
           example: Your order has shipped.
+        serviceLevel:
+          description: >-
+            How quickly the message is promised to reach the operator. Optional,
+            and
+
+            omitting it means `STANDARD` — the default is applied in the
+            controller,
+
+            which is the one place that knows a request said nothing.
+
+
+            `@IsIn` mirrors the codes `ServiceLevel.fromString` accepts, so an
+            unknown
+
+            level is a 400 from the validation pipe rather than the plain
+            `Error` that
+
+            value object throws (which would surface as a 500).
+            `forbidNonWhitelisted`
+
+            is on, so this property has to be declared here to be accepted at
+            all.
+          enum:
+            - STANDARD
+            - EXPRESS
+          type: string
+          default: STANDARD
+          example: EXPRESS
       required:
         - recipient
         - message

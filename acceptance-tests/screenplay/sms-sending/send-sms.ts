@@ -5,8 +5,9 @@ import {
   Task,
   Wait,
 } from '@serenity-js/core';
-import { Ensure, equals, includes } from '@serenity-js/assertions';
+import { Ensure, equals, includes, isAfter } from '@serenity-js/assertions';
 import {
+  Attribute,
   Click,
   Enter,
   isVisible,
@@ -19,6 +20,7 @@ import {
   LogIn,
   TheirOwnCredentials,
 } from '../authentication/log-in';
+import { FreezeTimeAt, theMomentScenariosFreezeTimeAt } from '../common/clock';
 import { AccountNotes } from '../common/notes';
 import {
   EnsureAccountCreditIs,
@@ -43,17 +45,63 @@ import { LookUpTheCostOfOneSms, TheCostOfOneSms } from './sms-pricing';
  * is lost by it: both fields are known when the step runs, the recipient coming from the scenario
  * and the message from the actor's own name. Anything needing them later reads the notepad
  * through {@link TheSmsTheySent}.
+ *
+ * **Express is a service level, so it arrives in `details` rather than in a second method.** The
+ * reasoning is in `sms-details.ts`; the consequence here is that `using` remains the single entry
+ * point and the two express-only activities are ordinary conditionals. They can be, precisely
+ * because `details` is a plain object rather than an answerable — the service level is known while
+ * the task is being *built*, so no `Check.whether` is needed and the description can say "express"
+ * out loud.
  */
 export class SendAnSms {
-  static using = (details: SmsDetails): Task =>
-    Task.where(
-      `#actor sends an SMS to ${details.recipient}`,
+  static using = (details: SmsDetails): Task => {
+    const express = details.serviceLevel === 'express';
+
+    return Task.where(
+      `#actor sends an${express ? ' express' : ''} SMS to ${details.recipient}`,
       notes<AccountNotes>().set('sms', details),
+      // **Order is load-bearing: the clock is fixed before anything logs in.** `LocateTheSendSmsForm`
+      // signs the actor in through the browser, and `JwtAuthGuard` verifies tokens against the same
+      // injected clock with a one-hour life. Jumping the clock forward *after* a login would
+      // therefore invalidate the session mid-scenario. Every `Given` above has already spent its own
+      // API token by now, so the top of the send is the safe moment. Do not reorder these.
+      ...(express ? [FixTheMomentOfSending()] : []),
       LocateTheSendSmsForm(),
       FillInTheSendSmsForm(details),
+      ...(express ? [ChooseExpressDelivery()] : []),
       SubmitTheSendSmsForm(),
     );
+  };
 }
+
+/**
+ * Pins the backend clock at `theMomentScenariosFreezeTimeAt` and remembers it in the notepad, so
+ * that "the guarantee is later than the send" can be asserted against the system's own timeline
+ * rather than against the host's wall clock — which sits months *ahead* of the instant the backend
+ * starts every scenario frozen at, and would make a perfectly correct future guarantee look past.
+ *
+ * This is the one call site `screenplay/common/clock.ts` was waiting for.
+ */
+const FixTheMomentOfSending = (): Task =>
+  Task.where(
+    `#actor fixes the moment of sending at ${theMomentScenariosFreezeTimeAt}`,
+    FreezeTimeAt(theMomentScenariosFreezeTimeAt),
+    notes<AccountNotes>().set('sentAt', theMomentScenariosFreezeTimeAt),
+  );
+
+/**
+ * The one extra thing an express sender does on the form. It sits beside filling the form rather
+ * than inside it, so the report shows choosing express as a business step of its own.
+ *
+ * A `Click` because `@serenity-js/web` has no `Check`/`Tick` interaction — and because clicking is
+ * what a person does to a checkbox. The control starts unchecked, so this is a select and not a
+ * toggle; if it ever ships checked by default, this silently turns express *off*.
+ */
+const ChooseExpressDelivery = (): Task =>
+  Task.where(
+    '#actor chooses express delivery',
+    Click.on(Form.checkboxFor('Express delivery')),
+  );
 
 /**
  * Opening this page is more than a navigation: **the browser has no session yet**. Every `Given`
@@ -123,6 +171,66 @@ export const EnsureSmsSent = (): Task =>
       includes(TheConfirmationTheyExpect()),
     ),
     Ensure.that(Page.current().url().pathname, equals('/send-sms')),
+  );
+
+/**
+ * The moment the send happened — a notepad read of the instant {@link FixTheMomentOfSending} froze
+ * the clock at. No request, so it is safe anywhere.
+ *
+ * A `Date` rather than epoch milliseconds because `isAfter` takes `Answerable<Timestamp | Date>`,
+ * so the comparison can read as the time comparison it actually is instead of as arithmetic.
+ */
+export const TheMomentTheySent = (): QuestionAdapter<Date> =>
+  Question.about(
+    'the moment they sent the SMS',
+    async (actor) =>
+      new Date(await actor.answer(notes<AccountNotes>().get('sentAt'))),
+  );
+
+/**
+ * The instant the confirmation promises the message will reach the operator by.
+ *
+ * Read from the `datetime` **attribute**, never from the rendered text. That is the whole point of
+ * asking the frontend for a `<time datetime="…">`: the visible copy is free to be localised,
+ * reformatted or reworded without this question changing, and an ISO-8601 instant parses
+ * unambiguously where "09:05 on 1 January 2026" does not.
+ */
+export const TheGuaranteedDeliveryTime = (): QuestionAdapter<Date> =>
+  Question.about(
+    'the guaranteed delivery time to the operator',
+    async (actor) =>
+      new Date(
+        await actor.answer(
+          Attribute.called('datetime').of(Form.deliveryGuarantee()),
+        ),
+      ),
+  );
+
+/**
+ * Express's whole point: the sender is told *when* the message is guaranteed to reach the operator.
+ *
+ * Asserted through the UI, because being told is the claim. Three things, in order: the guarantee is
+ * on screen; the banner says in words a person reads what that time *means*, so this cannot pass on
+ * a stray `<time>` element alone; and the instant it promises is genuinely later than the moment the
+ * send happened, so an empty or epoch-defaulted attribute fails.
+ *
+ * **The length of the guarantee window is deliberately not asserted.** The scenario says "the
+ * guaranteed delivery time", not "within five minutes" — asserting a figure the Gherkin declines to
+ * state would put a product constant in the automation layer, and computing it from a window the
+ * backend also published would only prove the suite can repeat the backend's own arithmetic.
+ *
+ * Only the fixed phrase is asserted, not the formatted date: reproducing the frontend's date
+ * rendering here would couple the suite to a presentation decision and break on every copy tweak.
+ */
+export const EnsureGuaranteedDeliveryTimeShown = (): Task =>
+  Task.where(
+    '#actor ensures they are shown the guaranteed delivery time to the operator',
+    Wait.until(Form.deliveryGuarantee(), isVisible()),
+    Ensure.that(
+      Text.of(Form.confirmation()),
+      includes('reach the operator by'),
+    ),
+    Ensure.that(TheGuaranteedDeliveryTime(), isAfter(TheMomentTheySent())),
   );
 
 /**

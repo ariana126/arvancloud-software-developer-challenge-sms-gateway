@@ -1,6 +1,13 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MessageBody } from '@sms/domain/value/message-body';
-import { IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 /**
  * Every constraint here **mirrors a value object**, and nothing enforces the
@@ -18,6 +25,7 @@ import { IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
  * | `recipient` `@Matches(MOBILE)`    | `PhoneNumber.LOCAL` / `.INTERNATIONAL` |
  * | `message`   `@IsNotEmpty`         | `MessageBody` rejects an empty body    |
  * | `message`   `@MaxLength(160)`     | `MessageBody.MAX_LENGTH`               |
+ * | `serviceLevel` `@IsIn([…])`       | the codes `ServiceLevel.fromString` accepts |
  *
  * Change either side and change the other.
  */
@@ -43,4 +51,23 @@ export class SendSmsDto {
   @IsNotEmpty()
   @MaxLength(MessageBody.MAX_LENGTH)
   message: string;
+
+  /**
+   * How quickly the message is promised to reach the operator. Optional, and
+   * omitting it means `STANDARD` — the default is applied in the controller,
+   * which is the one place that knows a request said nothing.
+   *
+   * `@IsIn` mirrors the codes `ServiceLevel.fromString` accepts, so an unknown
+   * level is a 400 from the validation pipe rather than the plain `Error` that
+   * value object throws (which would surface as a 500). `forbidNonWhitelisted`
+   * is on, so this property has to be declared here to be accepted at all.
+   */
+  @ApiPropertyOptional({
+    enum: ['STANDARD', 'EXPRESS'],
+    default: 'STANDARD',
+    example: 'EXPRESS',
+  })
+  @IsOptional()
+  @IsIn(['STANDARD', 'EXPRESS'])
+  serviceLevel?: 'STANDARD' | 'EXPRESS';
 }

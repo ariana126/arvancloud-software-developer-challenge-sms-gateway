@@ -13,6 +13,7 @@ import { FieldTree, form, pattern, required, submit, validate } from '@angular/f
 import { toProblemDetails } from '../../../core/http/problem-details';
 import { toSubmissionErrors } from '../../../core/http/server-errors';
 import { SmsGateway } from '../../../core/sms/sms-gateway';
+import { CheckboxField } from '../../../ui/checkbox-field/checkbox-field';
 import { TextField } from '../../../ui/text-field/text-field';
 
 const SEND_FAILED = 'We could not send your SMS. Check your connection and try again.';
@@ -42,7 +43,7 @@ const FIELD_MESSAGES: Readonly<Record<string, string>> = {
 
 @Component({
   selector: 'app-send-sms-page',
-  imports: [TextField],
+  imports: [CheckboxField, TextField],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './send-sms-page.html',
   styleUrl: './send-sms-page.css',
@@ -56,7 +57,7 @@ export class SendSmsPage {
    * model is what the page holds, and the gateway call is where the compiler checks it against the
    * contract. Never `null` or `undefined`.
    */
-  protected readonly model = signal({ recipient: '', message: '' });
+  protected readonly model = signal({ recipient: '', message: '', express: false });
 
   protected readonly f = form(this.model, (path) => {
     required(path.recipient, { message: 'Enter the number to send to.' });
@@ -74,6 +75,11 @@ export class SendSmsPage {
         ? { kind: 'maxlength', message: TOO_LONG }
         : undefined,
     );
+    // `path.express` carries no rule at all, and that is deliberate twice over. There is no invalid
+    // value — false is an answer, not a blank — and `required()` on a checkbox is the same trap as
+    // `maxLength()` above: it makes [formField] write a real `required` attribute, and a real browser
+    // then refuses to submit the form until the box is ticked. Express is opt-in. jsdom enforces no
+    // constraint validation, so nothing in this spec file would notice; do not add a rule here.
   });
 
   /**
@@ -115,6 +121,38 @@ export class SendSmsPage {
    */
   protected readonly sentTo = signal('');
 
+  /**
+   * The ISO-8601 instant the message just sent is guaranteed by, or '' when nothing was promised —
+   * which is every standard send.
+   *
+   * A plain component signal for exactly the reason `sentTo` is one, and the reason is worth repeating
+   * rather than cross-referencing: anything the form owns lives in a `linkedSignal` sourced on the
+   * model, so it evaporates on the next edit. This value has to survive the `reset()` that happens
+   * one line after it is set.
+   */
+  protected readonly guaranteedBy = signal('');
+
+  /**
+   * The same instant as something a person reads. Empty whenever `guaranteedBy` is, so one check
+   * governs both halves of the guarantee and a standard send can render neither.
+   *
+   * Only the clock time, not the date: the promise is minutes away, so the date would be noise on
+   * every single send. Nothing is lost by leaving it out, because the full instant is published in
+   * the `<time datetime>` beside it — which is the attribute anything machine-readable should be
+   * reading anyway.
+   */
+  protected readonly guaranteedByText = computed(() => {
+    const instant = this.guaranteedBy();
+    if (instant === '') {
+      return '';
+    }
+
+    return new Date(instant).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  });
+
   /** Errors with no field of their own — the ones the alert banner shows. */
   protected readonly formErrors = computed(() =>
     this.f()
@@ -129,12 +167,14 @@ export class SendSmsPage {
     // Cleared first, so a confirmation from the previous message cannot sit beside a failing one —
     // and so that a non-empty value below can only mean *this* attempt succeeded.
     this.sentTo.set('');
+    this.guaranteedBy.set('');
 
     await submit(this.f, async () => {
-      const { recipient, message } = this.model();
+      const { recipient, message, express } = this.model();
 
       try {
-        await this.sms.sendSms({ recipient, message });
+        const receipt = await this.sms.sendSms({ recipient, message, express });
+        this.guaranteedBy.set(receipt.guaranteedDeliveryAt);
       } catch (error) {
         return toSubmissionErrors(toProblemDetails(error), {
           targets: { recipient: this.f.recipient, message: this.f.message },
@@ -152,7 +192,10 @@ export class SendSmsPage {
       // last one in place puts an accidental duplicate — a second charge — one keystroke away.
       // `reset()` is what keeps the now-empty required fields from reporting themselves: it clears
       // the touched and submitted state that would otherwise make them show errors immediately.
-      this.model.set({ recipient: '', message: '' });
+      // `express` goes back to false with them: it is a per-message choice, and a box left ticked
+      // would send the next message express without anyone having asked for it. Not a matter of cost
+      // — express is priced the same — but of a promise being made on the sender's behalf.
+      this.model.set({ recipient: '', message: '', express: false });
       this.f().reset();
       return;
     }

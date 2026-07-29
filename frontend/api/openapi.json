@@ -525,7 +525,7 @@
         },
         "responses": {
           "201": {
-            "description": "Message sent and charged",
+            "description": "Message sent and charged. `guaranteedDeliveryAt` is present only for an express send — a standard send promises no delivery time, so the field is absent rather than null.",
             "content": {
               "application/json": {
                 "schema": {
@@ -537,8 +537,18 @@
                     "cost": {
                       "type": "number",
                       "example": 1000
+                    },
+                    "guaranteedDeliveryAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "The instant by which an express message is guaranteed to reach the operator. Omitted for a standard send.",
+                      "example": "2026-01-01T00:05:00.000Z"
                     }
-                  }
+                  },
+                  "required": [
+                    "id",
+                    "cost"
+                  ]
                 }
               }
             }
@@ -835,6 +845,16 @@
             "description": "Mirrors `MessageBody`: non-empty, and at most `MessageBody.MAX_LENGTH`\n(160 — one GSM segment). Change `message-body.ts` and these change with it.",
             "maxLength": 160,
             "example": "Your order has shipped."
+          },
+          "serviceLevel": {
+            "description": "How quickly the message is promised to reach the operator. Optional, and\nomitting it means `STANDARD` — the default is applied in the controller,\nwhich is the one place that knows a request said nothing.\n\n`@IsIn` mirrors the codes `ServiceLevel.fromString` accepts, so an unknown\nlevel is a 400 from the validation pipe rather than the plain `Error` that\nvalue object throws (which would surface as a 500). `forbidNonWhitelisted`\nis on, so this property has to be declared here to be accepted at all.",
+            "enum": [
+              "STANDARD",
+              "EXPRESS"
+            ],
+            "type": "string",
+            "default": "STANDARD",
+            "example": "EXPRESS"
           }
         },
         "required": [
