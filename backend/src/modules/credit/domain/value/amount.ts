@@ -18,6 +18,19 @@ export class Amount extends ValueObject {
     return Amount.fromNumber(this.value + other.value);
   }
 
+  /**
+   * Callers must check `isAtLeast` first. Going below zero here would surface
+   * as the plain `Error` from `fromNumber` — a 500 rather than the 4xx an
+   * insufficient balance deserves.
+   */
+  public subtract(other: Amount): Amount {
+    return Amount.fromNumber(this.value - other.value);
+  }
+
+  public isAtLeast(other: Amount): boolean {
+    return this.value >= other.value;
+  }
+
   public isPositive(): boolean {
     return this.value > 0;
   }

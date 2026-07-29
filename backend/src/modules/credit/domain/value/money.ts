@@ -22,6 +22,24 @@ export class Money extends ValueObject {
     return new Money(this.amount.add(other.amount), this.currency);
   }
 
+  /**
+   * Callers must establish `isAtLeast(other)` first — subtracting past zero
+   * throws a plain `Error` from `Amount`, which reaches a client as a 500.
+   */
+  public subtract(other: Money): Money {
+    if (!this.currency.equals(other.currency)) {
+      throw new Error('Cannot subtract money amounts in different currencies.');
+    }
+    return new Money(this.amount.subtract(other.amount), this.currency);
+  }
+
+  public isAtLeast(other: Money): boolean {
+    if (!this.currency.equals(other.currency)) {
+      throw new Error('Cannot compare money amounts in different currencies.');
+    }
+    return this.amount.isAtLeast(other.amount);
+  }
+
   public isPositive(): boolean {
     return this.amount.isPositive();
   }

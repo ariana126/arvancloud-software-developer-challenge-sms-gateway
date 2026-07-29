@@ -292,6 +292,30 @@ must not import its own package's `index.ts`. That last one is the easiest to tr
 obvious: importing your own barrel creates a load-order cycle that crashes at runtime rather than
 at build time. Import the sibling module directly.
 
+**`modules-isolated` carries one carve-out: a module's `domain/service/` directory is importable
+across module boundaries, and nothing else is.** That directory is a module's *published port
+surface* — the abstract classes another module may depend on, plus the exceptions those ports
+declare. Everything else (aggregates, value objects, handlers, controllers, persistence) stays
+module-private. The case that bought it: `sms` must charge a user's credit, and the alternatives
+were duplicating the balance, or making an in-process feature talk to itself over HTTP. A narrow
+port is cheaper than either. It is also why `InsufficientCredit` sits in
+`credit/domain/service/` rather than beside `WalletVersionConflict` in `credit/domain/exception/`
+— a caller in another module has to be able to name the type to react to it, so it belongs on the
+seam. Bind the port with `@Global()` on the owning module (as `AuthModule` and `ClockModule` do)
+and export it: `sms.module.ts` importing `credit.module.ts` would be infrastructure reaching into
+infrastructure, which this rule still forbids.
+
+Two mechanics in how that carve-out is written, both easy to break by tidying. Its `to.pathNot` is
+an **array**, and dependency-cruiser joins an array to a single string with a naked `|` during
+rule-set normalization (`main/helpers.mjs`, `normalizeToREAsString`) *before* the `$1`
+back-reference to the `from` group is substituted (`utl/regex-util.mjs`,
+`replaceGroupPlaceholders`) — so the back-reference survives the array, verified against the
+installed `dependency-cruiser@18.1.0`. And because the join wraps nothing in `(?:…)`, **every
+alternative must anchor itself with `^`**. The carve-out is exercised for real by
+`sms/application/commands/send-sms/send-sms.handler.ts`, which imports `CreditLedger` and
+`InsufficientCredit` from `@credit/domain/service/*` — that import is what a passing
+`make lint-architecture` now actually demonstrates.
+
 One documented exception is whitelisted: `HttpExceptionFilter` composes the module exception
 mappers (see `src/framework/CLAUDE.md`). Two mechanics worth knowing when a rule fires
 unexpectedly: `no-circular` ignores cycles routed through an `index.ts`, and
@@ -346,6 +370,8 @@ is `timestamp without time zone`, which stores bare UTC that then reads back as 
 
 - `@framework/*` → `src/framework/*`
 - `@identity/*` → `src/modules/identity/*`
+- `@credit/*` → `src/modules/credit/*`
+- `@sms/*` → `src/modules/sms/*`
 
 ### Logging
 

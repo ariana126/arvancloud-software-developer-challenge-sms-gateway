@@ -19,6 +19,12 @@ export const routes: Routes = [
     loadChildren: () => import('./features/identity/identity.routes').then((m) => m.identityRoutes),
   },
   {
+    // Its own prefix, and its own chunk: the empty path is taken, and nothing about sending a
+    // message is shared with the identity pages.
+    path: 'send-sms',
+    loadChildren: () => import('./features/sms/sms.routes').then((m) => m.smsRoutes),
+  },
+  {
     path: '**',
     title: 'Page not found · nmk',
     loadComponent: () => import('./features/not-found/not-found-page').then((m) => m.NotFoundPage),

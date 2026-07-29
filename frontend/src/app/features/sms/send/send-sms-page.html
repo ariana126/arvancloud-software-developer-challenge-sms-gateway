@@ -1,0 +1,67 @@
+<!--
+  `novalidate` is mandatory, not stylistic. The [formField] directive writes real `required` and
+  `pattern` attributes onto these inputs, so without it the browser runs its own constraint
+  validation, blocks the submit event and shows a native bubble — and the accessible regions below
+  never render. jsdom does not enforce constraint validation, so the unit tests stay green either
+  way; this only breaks in a real browser.
+-->
+<form class="card stack" novalidate (submit)="onSubmit($event)">
+  <div class="stack--tight stack">
+    <p class="eyebrow">Send</p>
+    <h1>Send an SMS</h1>
+  </div>
+
+  <!--
+    Both live regions are present in the DOM at all times, with only their content toggled. A region
+    inserted together with its text is announced unreliably; one that gains content is not. The
+    alert carries tabindex="-1" so focus can be moved to it when the failure belongs to no single
+    field. `.alert:empty` collapses either one while it has nothing to say.
+  -->
+  <div class="alert alert--danger" role="alert" id="send-sms-alert" tabindex="-1">
+    @if (formErrors().length > 0) {
+      <span>{{ formErrors()[0] }}</span>
+    }
+  </div>
+
+  <div class="alert alert--notice" role="status" id="send-sms-status">
+    @if (sentTo() !== '') {
+      <span>Your SMS has been sent to {{ sentTo() }}</span>
+    }
+  </div>
+
+  <app-text-field
+    [field]="f.recipient"
+    name="recipient"
+    label="Recipient number"
+    type="tel"
+    autocomplete="tel"
+    hint="An Iranian mobile number, like 09121234567."
+  />
+
+  <!--
+    A single-line input for a 160-character message is a known compromise, not an oversight: a
+    <textarea> would mean hand-rolling [formField], which loses the accessible wiring app-text-field
+    exists to own. A sibling app-textarea-field would be the way to fix it, and swapping to one
+    later changes nothing about the label or the error markup.
+  -->
+  <app-text-field
+    [field]="f.message"
+    name="message"
+    label="Message"
+    autocomplete="off"
+    hint="Up to 160 characters."
+  />
+
+  @if (priceHint() !== '') {
+    <p class="field__hint" id="send-sms-price">{{ priceHint() }}</p>
+  }
+
+  <button
+    class="button button--primary"
+    type="submit"
+    [disabled]="f().submitting()"
+    [attr.aria-describedby]="priceHint() === '' ? null : 'send-sms-price'"
+  >
+    {{ f().submitting() ? 'Sending…' : 'Send SMS' }}
+  </button>
+</form>

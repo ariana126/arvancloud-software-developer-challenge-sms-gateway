@@ -3,9 +3,10 @@ import { email, FieldTree, form, minLength, required, submit } from '@angular/fo
 import { Router, RouterLink } from '@angular/router';
 
 import { toProblemDetails } from '../../../core/http/problem-details';
+import { toSubmissionErrors } from '../../../core/http/server-errors';
 import { IdentityGateway } from '../../../core/identity/identity-gateway';
 import { TextField } from '../../../ui/text-field/text-field';
-import { toSubmissionErrors } from '../server-errors';
+import { IDENTITY_FIELD_MESSAGES } from '../field-messages';
 
 const SIGN_UP_FAILED = 'We could not create your account. Check your connection and try again.';
 
@@ -70,7 +71,11 @@ export class SignUpPage {
       try {
         await this.identity.signUp({ email: address, password, firstName, lastName });
       } catch (error) {
-        return toSubmissionErrors(toProblemDetails(error), this.targets(), SIGN_UP_FAILED);
+        return toSubmissionErrors(toProblemDetails(error), {
+          targets: this.targets(),
+          fieldMessages: IDENTITY_FIELD_MESSAGES,
+          fallback: SIGN_UP_FAILED,
+        });
       }
 
       // Past this point the account exists. A failure now is a *login* failure, and reporting it as

@@ -17,7 +17,8 @@
     "paths": {
       "@framework/*": ["src/framework/*"],
       "@identity/*": ["src/modules/identity/*"],
-      "@credit/*": ["src/modules/credit/*"]
+      "@credit/*": ["src/modules/credit/*"],
+      "@sms/*": ["src/modules/sms/*"]
     },
     "incremental": true,
     "skipLibCheck": true,

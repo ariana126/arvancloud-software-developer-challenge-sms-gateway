@@ -1,0 +1,10 @@
+model SmsMessage {
+  id        String   @id @default(uuid())
+  senderId  String   @map("sender_id")
+  recipient String
+  body      String
+  status    String
+  sentAt    DateTime @db.Timestamptz(3) @map("sent_at")
+
+  @@map("sms_message")
+}

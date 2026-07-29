@@ -15,6 +15,7 @@ import { SessionStore } from '../../core/identity/session-store';
 
         <div class="actions">
           @if (isAuthenticated()) {
+            <a class="button button--primary" routerLink="/send-sms">Send SMS</a>
             <a class="button button--quiet" routerLink="/profile">Profile</a>
             <button class="button button--quiet" type="button" (click)="logOut()">Log out</button>
           } @else {

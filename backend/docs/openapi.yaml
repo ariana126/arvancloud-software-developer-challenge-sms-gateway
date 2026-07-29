@@ -334,6 +334,159 @@ paths:
       summary: Get the current user's account credit
       tags:
         - Credit
+  /api/sms:
+    post:
+      operationId: SmsController_send
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSmsDto'
+      responses:
+        '201':
+          description: Message sent and charged
+          content:
+            application/json:
+              schema:
+                properties:
+                  id:
+                    type: string
+                    example: 550e8400-e29b-41d4-a716-446655440000
+                  cost:
+                    type: number
+                    example: 1000
+        '400':
+          description: ''
+          content:
+            application/json:
+              schema:
+                properties:
+                  type:
+                    type: string
+                    example: https://my-api-doc.dev/problems/validation-error
+                  title:
+                    type: string
+                    example: Validation Error
+                  status:
+                    type: number
+                    example: 400
+                  detail:
+                    type: string
+                    example: One or more fields failed validation.
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        field:
+                          type: string
+                          example: email
+                        message:
+                          type: string
+                          example: email must be an email
+        '401':
+          description: Missing or invalid JWT token
+          content:
+            application/json:
+              schema:
+                properties:
+                  type:
+                    type: string
+                    example: about:blank
+                  title:
+                    type: string
+                    example: Unauthorized
+                  status:
+                    type: number
+                    example: 401
+        '402':
+          description: The balance does not cover one message; nothing is charged
+          content:
+            application/json:
+              schema:
+                properties:
+                  type:
+                    type: string
+                    example: https://my-api-doc.dev/problems/insufficient-credit
+                  title:
+                    type: string
+                    example: Insufficient Credit
+                  status:
+                    type: number
+                    example: 402
+                  detail:
+                    type: string
+                    example: Sending an SMS costs 1000, but the sender has only 400.
+                  required:
+                    type: number
+                    example: 1000
+                  available:
+                    type: number
+                    example: 400
+        '409':
+          description: ''
+          content:
+            application/json:
+              schema:
+                properties:
+                  type:
+                    type: string
+                    example: https://my-api-doc.dev/problems/concurrent-modification
+                  title:
+                    type: string
+                    example: Concurrent Modification
+                  status:
+                    type: number
+                    example: 409
+                  detail:
+                    type: string
+                    example: >-
+                      Could not update the wallet: too many concurrent
+                      modifications.
+      security:
+        - bearer: []
+      summary: Send an SMS, charged against the current credit
+      tags:
+        - SMS
+  /api/sms/pricing:
+    get:
+      operationId: SmsController_pricing
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                properties:
+                  costPerSms:
+                    type: number
+                    example: 1000
+                  currency:
+                    type: string
+                    example: RIALS
+        '401':
+          description: Missing or invalid JWT token
+          content:
+            application/json:
+              schema:
+                properties:
+                  type:
+                    type: string
+                    example: about:blank
+                  title:
+                    type: string
+                    example: Unauthorized
+                  status:
+                    type: number
+                    example: 401
+      security:
+        - bearer: []
+      summary: Get the price of sending one SMS
+      tags:
+        - SMS
 info:
   title: API
   description: ''
@@ -393,3 +546,31 @@ components:
           description: Amount to add, in Rials.
       required:
         - amount
+    SendSmsDto:
+      type: object
+      properties:
+        recipient:
+          type: string
+          description: >-
+            Mirrors `PhoneNumber.LOCAL` and `PhoneNumber.INTERNATIONAL` — an
+            Iranian
+
+            mobile number in local (`09121234567`) or international
+            (`+989121234567`)
+
+            form. Change `phone-number.ts` and this regex changes with it.
+          pattern: ^(?:09\d{9}|\+989\d{9})$
+          example: '09121234567'
+        message:
+          type: string
+          description: >-
+            Mirrors `MessageBody`: non-empty, and at most
+            `MessageBody.MAX_LENGTH`
+
+            (160 — one GSM segment). Change `message-body.ts` and these change
+            with it.
+          maxLength: 160
+          example: Your order has shipped.
+      required:
+        - recipient
+        - message

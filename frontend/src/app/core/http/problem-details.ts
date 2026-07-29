@@ -12,6 +12,8 @@ export const PROBLEM = {
   userAlreadyExists: 'https://my-api-doc.dev/problems/user-already-exists',
   invalidCredentials: 'https://my-api-doc.dev/problems/invalid-credentials',
   entityNotFound: 'https://my-api-doc.dev/problems/entity-not-found',
+  insufficientCredit: 'https://my-api-doc.dev/problems/insufficient-credit',
+  concurrentModification: 'https://my-api-doc.dev/problems/concurrent-modification',
 } as const;
 
 /** One entry of a validation error's `errors` array. `field` matches the DTO property name. */

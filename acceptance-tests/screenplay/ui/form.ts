@@ -42,6 +42,20 @@ export class Form {
       'the form error summary',
     );
 
+  /**
+   * The form-level confirmation banner — the success counterpart to {@link errorSummary}, and
+   * scoped to the form for the same reason: nothing outside it can accidentally match.
+   *
+   * `role="status"` rather than `role="alert"` because a completed send is polite news, not an
+   * error, and a screen reader should announce it without interrupting. Like the error banner it
+   * is expected to be in the DOM whether or not there is anything to say, so ask whether it is
+   * *visible* or what it *says* — never merely whether it is present.
+   */
+  static confirmation = () =>
+    PageElement.located(By.css('form [role="status"]')).describedAs(
+      'the form confirmation message',
+    );
+
   private static fieldCalled = (label: string) =>
     Form.fields().where(Text.of(Form.label()), equals(label)).first();
 

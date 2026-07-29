@@ -1,41 +1,68 @@
 import { Given, Then, When } from '@cucumber/cucumber';
-import { Actor } from '@serenity-js/core';
+import { Actor, actorInTheSpotlight } from '@serenity-js/core';
+import { EnsureAccountCreditIs } from '../../screenplay/credit/account-credit';
+import {
+  EnsureNoCostWasDeducted,
+  EnsureSendRejectedForInsufficientCredit,
+  EnsureSmsSent,
+  EnsureTheCostOfOneSmsWasDeducted,
+  SendAnSms,
+} from '../../screenplay/sms-sending/send-sms';
+import { smsDetailsOf } from '../../screenplay/sms-sending/sms-details';
+import { StartWithJustEnoughCreditForOneSms } from '../../screenplay/sms-sending/sms-pricing';
 
+// The two credit preconditions worded with a number ("is 0", "is 10000 Rials") live in
+// step-definitions/credit — credit is their domain, and both SMS features share them.
 Given(
   "{actor}'s account credit is exactly the cost of one SMS",
-  function (_actor: Actor) {
-    return 'pending';
+  function (actor: Actor) {
+    return actor.attemptsTo(StartWithJustEnoughCreditForOneSms());
   },
 );
 
+// Active voice, and the journey this product exists for — so it goes through the browser.
+// The recipient comes from the scenario; the message body is derived (see sms-details.ts).
 When(
   '{actor} sends an SMS to {string}',
-  function (_actor: Actor, _number: string) {
-    return 'pending';
+  function (actor: Actor, recipient: string) {
+    return actor.attemptsTo(
+      SendAnSms.using(smsDetailsOf(actor.name, recipient)),
+    );
   },
 );
+
+// Moved here from send-express-sms.steps.ts: Cucumber's step registry is global, and this is the
+// feature that implements the step. Express only reaches it after its own `When`, which stays
+// pending, so it is skipped there.
+Then('the SMS is sent successfully', function () {
+  return actorInTheSpotlight().attemptsTo(EnsureSmsSent());
+});
 
 Then(
   "the cost of the SMS is deducted from {actor}'s account credit",
-  function (_actor: Actor) {
-    return 'pending';
+  function (actor: Actor) {
+    return actor.attemptsTo(EnsureTheCostOfOneSmsWasDeducted());
   },
 );
 
+// No "Rials" here, where increase-credit.feature's near-twin has one. Cucumber expressions are
+// anchored, so the two never compete.
 Then(
   "{actor}'s account credit becomes {int}",
-  function (_actor: Actor, _amount: number) {
-    return 'pending';
+  function (actor: Actor, amount: number) {
+    return actor.attemptsTo(EnsureAccountCreditIs(amount));
   },
 );
 
 Then('the send is rejected due to insufficient credit', function () {
-  return 'pending';
+  return actorInTheSpotlight().attemptsTo(
+    EnsureSendRejectedForInsufficientCredit(),
+  );
 });
 
 Then(
   "no cost is deducted from {actor}'s account credit",
-  function (_actor: Actor) {
-    return 'pending';
+  function (actor: Actor) {
+    return actor.attemptsTo(EnsureNoCostWasDeducted());
   },
 );

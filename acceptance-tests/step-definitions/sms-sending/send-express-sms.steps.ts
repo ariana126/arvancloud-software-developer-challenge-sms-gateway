@@ -1,25 +1,16 @@
-import { Given, Then, When } from '@cucumber/cucumber';
+import { Then, When } from '@cucumber/cucumber';
 import { Actor } from '@serenity-js/core';
 
-// Also matches "{actor}'s account credit is 10000 Rials" in send-sms.feature.
-Given(
-  "{actor}'s account credit is {int} Rials",
-  function (_actor: Actor, _amount: number) {
-    return 'pending';
-  },
-);
-
+// Two steps this file used to define have moved, because Cucumber's step registry is global and
+// neither is express-specific: the credit precondition to step-definitions/credit (its domain,
+// beside its "is {int}" sibling), and "the SMS is sent successfully" to send-sms.steps.ts (the
+// feature that implements it). Express pends at its own `When`, so it never reaches the latter.
 When(
   '{actor} sends an express SMS to {string}',
   function (_actor: Actor, _number: string) {
     return 'pending';
   },
 );
-
-// Also matches send-sms.feature's identical step text.
-Then('the SMS is sent successfully', function () {
-  return 'pending';
-});
 
 Then(
   '{actor} is shown the guaranteed delivery time to the operator',

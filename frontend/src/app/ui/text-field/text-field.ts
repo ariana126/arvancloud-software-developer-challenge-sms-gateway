@@ -52,7 +52,13 @@ export class TextField {
   /** Doubles as the control's `id`, so error and hint ids derive from it. */
   readonly name = input.required<string>();
   readonly label = input.required<string>();
-  readonly type = input<'text' | 'email' | 'password'>('text');
+  /**
+   * A closed union, so a caller cannot reach for an input type this component does not wire up.
+   * `tel` earns its place by being the right control for a phone number — a numeric keypad on a
+   * phone — while running no browser constraint validation of its own, so it cannot interact with
+   * the `novalidate` trap that `required` and `pattern` attributes create.
+   */
+  readonly type = input<'text' | 'email' | 'password' | 'tel'>('text');
   readonly autocomplete = input.required<string>();
   readonly hint = input('');
 

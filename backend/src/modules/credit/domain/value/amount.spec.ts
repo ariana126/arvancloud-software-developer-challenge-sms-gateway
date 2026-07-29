@@ -24,6 +24,36 @@ describe('Amount', () => {
     expect(sut.asNumber()).toBe(500);
   });
 
+  it('subtracting a smaller amount leaves the difference', () => {
+    const sut = Amount.fromNumber(500).subtract(Amount.fromNumber(200));
+    expect(sut.asNumber()).toBe(300);
+  });
+
+  it('subtracting an equal amount leaves zero', () => {
+    const sut = Amount.fromNumber(500).subtract(Amount.fromNumber(500));
+    expect(sut.asNumber()).toBe(0);
+  });
+
+  it('subtracting more than there is is rejected', () => {
+    expect(() =>
+      Amount.fromNumber(500).subtract(Amount.fromNumber(501)),
+    ).toThrow();
+  });
+
+  it('a larger amount is at least a smaller one', () => {
+    expect(Amount.fromNumber(500).isAtLeast(Amount.fromNumber(200))).toBe(true);
+  });
+
+  it('an amount is at least itself', () => {
+    expect(Amount.fromNumber(500).isAtLeast(Amount.fromNumber(500))).toBe(true);
+  });
+
+  it('a smaller amount is not at least a larger one', () => {
+    expect(Amount.fromNumber(499).isAtLeast(Amount.fromNumber(500))).toBe(
+      false,
+    );
+  });
+
   it('a positive amount reports itself as positive', () => {
     expect(Amount.fromNumber(1).isPositive()).toBe(true);
   });

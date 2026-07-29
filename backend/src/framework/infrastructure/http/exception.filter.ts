@@ -1,6 +1,7 @@
 import { CreditExceptionMapper } from '@credit/infrastructure/http/exception.mapper';
 import { IdentityExceptionMapper } from '@identity/infrastructure/http/exception.mapper';
 import { ArgumentsHost, Catch, ExceptionFilter } from '@nestjs/common';
+import { SmsExceptionMapper } from '@sms/infrastructure/http/exception.mapper';
 import { Response } from 'express';
 
 import { FrameworkExceptionMapper } from './exception.mapper';
@@ -11,6 +12,7 @@ const ExceptionMappers: ExceptionMapper[] = [
   new FrameworkExceptionMapper(),
   new IdentityExceptionMapper(),
   new CreditExceptionMapper(),
+  new SmsExceptionMapper(),
 ];
 
 @Catch()

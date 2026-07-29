@@ -1,6 +1,8 @@
 import { AggregateRoot, Identity } from '@framework/domain';
 
+import { CreditDecreased } from './events/credit-decreased.event';
 import { CreditIncreased } from './events/credit-increased.event';
+import { InsufficientCredit } from './service/insufficient-credit.exception';
 import { Money } from './value/money';
 
 export class Wallet extends AggregateRoot {
@@ -21,6 +23,26 @@ export class Wallet extends AggregateRoot {
     }
     this.balance = this.balance.add(amount);
     this.recordThat(new CreditIncreased(this.id.asString(), amount.asRials()));
+  }
+
+  /**
+   * Both guards run before any subtraction: `Amount` rejects a negative value
+   * with a plain `Error`, which would reach a client as a 500, so a short
+   * balance has to be caught here as a `DomainException` instead.
+   */
+  public decrease(amount: Money): void {
+    if (!amount.isPositive()) {
+      throw new Error('Debit amount must be positive.');
+    }
+    if (!this.balance.isAtLeast(amount)) {
+      throw InsufficientCredit.forWallet(
+        this.id,
+        amount.asRials(),
+        this.balance.asRials(),
+      );
+    }
+    this.balance = this.balance.subtract(amount);
+    this.recordThat(new CreditDecreased(this.id.asString(), amount.asRials()));
   }
 
   public getBalance(): Money {

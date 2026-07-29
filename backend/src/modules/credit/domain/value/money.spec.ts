@@ -19,6 +19,32 @@ describe('Money', () => {
     expect(sut.asRials()).toBe(500);
   });
 
+  it('subtracting a smaller Rial amount leaves the difference', () => {
+    const sut = Money.rials(10_000).subtract(Money.rials(1000));
+    expect(sut.asRials()).toBe(9000);
+  });
+
+  it('subtracting an equal amount leaves nothing', () => {
+    const sut = Money.rials(1000).subtract(Money.rials(1000));
+    expect(sut.asRials()).toBe(0);
+  });
+
+  it('subtracting more than there is is rejected', () => {
+    expect(() => Money.rials(999).subtract(Money.rials(1000))).toThrow();
+  });
+
+  it('a larger amount is at least a smaller one', () => {
+    expect(Money.rials(10_000).isAtLeast(Money.rials(1000))).toBe(true);
+  });
+
+  it('an amount is at least itself', () => {
+    expect(Money.rials(1000).isAtLeast(Money.rials(1000))).toBe(true);
+  });
+
+  it('a smaller amount is not at least a larger one', () => {
+    expect(Money.rials(999).isAtLeast(Money.rials(1000))).toBe(false);
+  });
+
   it('a positive amount reports itself as positive', () => {
     expect(Money.rials(1).isPositive()).toBe(true);
   });

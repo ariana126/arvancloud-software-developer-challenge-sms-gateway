@@ -10,9 +10,10 @@ import { email, FieldTree, form, required, submit } from '@angular/forms/signals
 import { Router, RouterLink } from '@angular/router';
 
 import { toProblemDetails } from '../../../core/http/problem-details';
+import { toSubmissionErrors } from '../../../core/http/server-errors';
 import { IdentityGateway } from '../../../core/identity/identity-gateway';
 import { TextField } from '../../../ui/text-field/text-field';
-import { toSubmissionErrors } from '../server-errors';
+import { IDENTITY_FIELD_MESSAGES } from '../field-messages';
 
 const LOGIN_FAILED = 'We could not log you in. Check your connection and try again.';
 
@@ -68,11 +69,11 @@ export class LoginPage {
       try {
         await this.identity.logIn(this.model());
       } catch (error) {
-        return toSubmissionErrors(
-          toProblemDetails(error),
-          { email: this.f.email, password: this.f.password },
-          LOGIN_FAILED,
-        );
+        return toSubmissionErrors(toProblemDetails(error), {
+          targets: { email: this.f.email, password: this.f.password },
+          fieldMessages: IDENTITY_FIELD_MESSAGES,
+          fallback: LOGIN_FAILED,
+        });
       }
 
       await this.router.navigateByUrl(this.safeReturnUrl());

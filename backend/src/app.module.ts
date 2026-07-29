@@ -9,6 +9,7 @@ import {
 import { IdentityModule } from '@identity/infrastructure/identity.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { SmsModule } from '@sms/infrastructure/sms.module';
 import { LoggerModule } from 'nestjs-pino';
 
 @Module({
@@ -44,7 +45,10 @@ import { LoggerModule } from 'nestjs-pino';
     HealthModule,
     ...(process.env.NODE_ENV === 'test' ? [TestingModule] : []),
     IdentityModule,
+    // CreditModule is @Global() and must be registered before SmsModule, whose
+    // SendSmsHandler resolves the CreditLedger token it exports.
     CreditModule,
+    SmsModule,
   ],
   controllers: [],
   providers: [],

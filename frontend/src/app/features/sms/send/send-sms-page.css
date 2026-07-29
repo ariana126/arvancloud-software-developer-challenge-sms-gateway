@@ -1,0 +1,25 @@
+:host {
+  display: block;
+  padding: var(--space-7) var(--space-5);
+}
+
+form {
+  max-width: 26rem;
+  margin: 0 auto;
+}
+
+h1 {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+
+/*
+ * The price belongs to the button it describes, not to the field above it. The form is a .stack, so
+ * closing the distance means pulling the button up by the difference between the stack's gap and
+ * the one a hint keeps from its control.
+ */
+#send-sms-price {
+  margin-bottom: calc(var(--space-2) - var(--space-5));
+}

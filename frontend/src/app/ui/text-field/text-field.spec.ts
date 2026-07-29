@@ -12,7 +12,7 @@ import { TextField } from './text-field';
       [field]="f.email"
       name="email"
       label="Email address"
-      type="email"
+      [type]="type()"
       autocomplete="email"
       [hint]="hint()"
     />
@@ -20,6 +20,7 @@ import { TextField } from './text-field';
 })
 class Host {
   readonly hint = signal('');
+  readonly type = signal<'text' | 'email' | 'password' | 'tel'>('email');
   protected readonly model = signal({ email: '' });
   readonly f = form(this.model, (path) => {
     required(path.email, { message: 'Enter your email address.' });
@@ -52,6 +53,17 @@ describe('TextField', () => {
   it('turns off autocorrection for an email control, where it only gets in the way', () => {
     expect(input().getAttribute('autocapitalize')).toBe('none');
     expect(input().getAttribute('spellcheck')).toBe('false');
+  });
+
+  it('renders a phone control for a phone number, and leaves its correction alone', async () => {
+    host.type.set('tel');
+    await fixture.whenStable();
+
+    expect(input().type).toBe('tel');
+    // The email-only overrides stay off: a phone number is not something a spellchecker touches
+    // anyway, and `tel` runs no constraint validation, so nothing here can swallow a submit.
+    expect(input().hasAttribute('autocapitalize')).toBe(false);
+    expect(input().hasAttribute('spellcheck')).toBe(false);
   });
 
   it('describes nothing when there is no hint and no error', () => {

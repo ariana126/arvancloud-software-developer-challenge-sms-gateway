@@ -73,11 +73,24 @@ module.exports = {
     {
       name: 'modules-isolated',
       comment:
-        'A feature module must not import another module internally. Cross-module ' +
-        'interaction goes over HTTP, not by importing code.',
+        'A feature module must not import another module internally. The single ' +
+        "exception is a module's `domain/service/` directory: that is its published " +
+        'port surface — the abstract classes (and the exceptions they declare) another ' +
+        'module may depend on without reaching into aggregates, value objects, ' +
+        'handlers, controllers or persistence. `sms` charges credit through ' +
+        '`CreditLedger` this way. Everything else stays module-private.\n' +
+        'Two mechanics keep this rule working, both easy to break by tidying it: ' +
+        'the `pathNot` array is joined with a naked `|` during rule normalization ' +
+        '(main/helpers.mjs `normalizeToREAsString`) *before* `$1` is substituted ' +
+        '(utl/regex-util.mjs `replaceGroupPlaceholders`), so the back-reference to ' +
+        "the `from` group still binds — and because the join adds no `(?:...)` " +
+        'wrapper, every alternative must anchor itself with `^`.',
       severity: 'error',
       from: { path: '^src/modules/([^/]+)/' },
-      to: { path: '^src/modules/([^/]+)/', pathNot: '^src/modules/$1/' },
+      to: {
+        path: '^src/modules/([^/]+)/',
+        pathNot: ['^src/modules/$1/', '^src/modules/[^/]+/domain/service/'],
+      },
     },
   ],
   options: {

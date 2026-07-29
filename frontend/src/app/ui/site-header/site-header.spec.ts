@@ -28,6 +28,7 @@ describe('SiteHeader', () => {
           { path: 'login', component: StubPage },
           { path: 'sign-up', component: StubPage },
           { path: 'profile', component: StubPage },
+          { path: 'send-sms', component: StubPage },
         ]),
       ],
     });
@@ -63,6 +64,7 @@ describe('SiteHeader', () => {
       expect(labels).toContain('Create an account');
       expect(labels).not.toContain('Log out');
       expect(labels).not.toContain('Profile');
+      expect(labels).not.toContain('Send SMS');
     });
   });
 
@@ -77,6 +79,13 @@ describe('SiteHeader', () => {
       expect(labels).toContain('Profile');
       expect(labels).toContain('Log out');
       expect(labels).not.toContain('Log in');
+    });
+
+    it('leads with the thing the app is for', async () => {
+      const fixture = await renderHeader();
+
+      expect(linkLabels(fixture)[1]).toBe('Send SMS');
+      expect(fixture.nativeElement.querySelector('a[href="/send-sms"]')).not.toBeNull();
     });
 
     it('gives the log out control an explicit type, so it never submits a form around it', async () => {

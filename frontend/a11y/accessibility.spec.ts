@@ -11,7 +11,7 @@ import { ACCESS_TOKEN_STORAGE_KEY } from '../src/app/core/identity/access-token-
  * nothing checks. This is the one manual step the gate depends on.
  */
 const publicRoutes = ['/', '/sign-up', '/login', '/no-such-page'];
-const authenticatedRoutes = ['/profile'];
+const authenticatedRoutes = ['/profile', '/send-sms'];
 
 /**
  * The rules the gate enforces: every axe rule that maps to a WCAG A or AA success criterion,
@@ -90,6 +90,16 @@ test.describe('behind the auth guard', () => {
           firstName: 'Audit',
           lastName: 'User',
         }),
+      }),
+    );
+
+    // The send page asks what a message costs as it renders. Stubbed for the same reasons and in
+    // the same place: the audit grades the price hint's contrast, not the API that supplies it.
+    await page.route('**/api/sms/pricing', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ costPerSms: 1000, currency: 'RIALS' }),
       }),
     );
   });
