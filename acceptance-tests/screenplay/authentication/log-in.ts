@@ -23,7 +23,7 @@ export interface Credentials {
   password?: string;
 }
 
-interface AccessTokenBody {
+export interface AccessTokenBody {
   accessToken: string;
 }
 
@@ -36,6 +36,22 @@ export const TheirOwnCredentials = (): QuestionAdapter<Credentials> =>
     const details = await actor.answer(TheDetailsTheySignedUpWith());
     return { email: details.email, password: details.password };
   });
+
+/**
+ * A bearer `Authorization` header value, read off the actor's last login response.
+ *
+ * For feature areas with a UI (registration, authentication itself), the browser carries the
+ * token in `localStorage` and nothing here is needed. Feature areas that only ever go through
+ * the API (credit, and eventually sms-sending/reporting) have no such carrier, so their tasks
+ * call `LogIn.viaApiUsing` immediately beforehand and read the token straight off that response
+ * via this question — kept here, next to `LogIn`, rather than duplicated per feature area.
+ */
+export const TheirBearerToken = (): QuestionAdapter<string> =>
+  Question.about(
+    'their bearer token',
+    async (actor) =>
+      `Bearer ${await actor.answer(LastResponse.body<AccessTokenBody>().accessToken)}`,
+  );
 
 /**
  * The same two routes as {@link SignUp}, for the same reason.

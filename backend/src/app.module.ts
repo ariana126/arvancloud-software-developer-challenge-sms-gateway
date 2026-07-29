@@ -1,3 +1,4 @@
+import { CreditModule } from '@credit/infrastructure/credit.module';
 import {
   AuthModule,
   ClockModule,
@@ -43,6 +44,7 @@ import { LoggerModule } from 'nestjs-pino';
     HealthModule,
     ...(process.env.NODE_ENV === 'test' ? [TestingModule] : []),
     IdentityModule,
+    CreditModule,
   ],
   controllers: [],
   providers: [],

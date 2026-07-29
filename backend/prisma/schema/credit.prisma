@@ -1,0 +1,7 @@
+model Wallet {
+  id      String @id
+  balance Int
+  version Int    @default(0)
+
+  @@map("credit_wallet")
+}
