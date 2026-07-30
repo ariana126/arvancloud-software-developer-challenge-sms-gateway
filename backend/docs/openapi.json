@@ -691,6 +691,102 @@
         "tags": [
           "SMS"
         ]
+      },
+      "get": {
+        "operationId": "SmsController_report",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The messages this user has sent, newest first. A user who has sent nothing gets an empty array — an empty report is a report, not a missing one, so there is no 404 on this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "example": "550e8400-e29b-41d4-a716-446655440000"
+                      },
+                      "recipient": {
+                        "type": "string",
+                        "example": "09121234567"
+                      },
+                      "message": {
+                        "type": "string",
+                        "description": "The text that was sent, under the same name it was sent with.",
+                        "example": "Your order has shipped."
+                      },
+                      "status": {
+                        "type": "string",
+                        "example": "SENT"
+                      },
+                      "serviceLevel": {
+                        "type": "string",
+                        "enum": [
+                          "STANDARD",
+                          "EXPRESS"
+                        ],
+                        "example": "STANDARD"
+                      },
+                      "cost": {
+                        "type": "number",
+                        "description": "What one message costs at the current tariff. Bare, like the send response — `GET /api/sms/pricing` is where the currency is published.",
+                        "example": 1000
+                      },
+                      "sentAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "example": "2026-01-01T00:00:00.000Z"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "recipient",
+                      "message",
+                      "status",
+                      "serviceLevel",
+                      "cost",
+                      "sentAt"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "example": "about:blank"
+                    },
+                    "title": {
+                      "type": "string",
+                      "example": "Unauthorized"
+                    },
+                    "status": {
+                      "type": "number",
+                      "example": 401
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get a report of the current user's sent messages",
+        "tags": [
+          "SMS"
+        ]
       }
     },
     "/api/sms/pricing": {

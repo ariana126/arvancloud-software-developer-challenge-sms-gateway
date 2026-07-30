@@ -20,6 +20,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { SendSmsCommand } from '@sms/application/commands/send-sms/send-sms.command';
+import { GetSentSmsReportQuery } from '@sms/application/queries/get-sent-sms-report/get-sent-sms-report.query';
+import { SentSmsReadModel } from '@sms/application/queries/get-sent-sms-report/sent-sms.read-model';
 import { GetSmsPricingQuery } from '@sms/application/queries/get-sms-pricing/get-sms-pricing.query';
 import { SmsPricingReadModel } from '@sms/application/queries/get-sms-pricing/sms-pricing.read-model';
 import { MessageBody } from '@sms/domain/value/message-body';
@@ -129,5 +131,68 @@ export class SmsController {
   })
   async pricing(): Promise<SmsPricingReadModel> {
     return this.queryBus.execute(new GetSmsPricingQuery());
+  }
+
+  @Get()
+  @ApiOperation({ summary: "Get a report of the current user's sent messages" })
+  @ApiOkResponse({
+    description:
+      'The messages this user has sent, newest first. A user who has sent nothing gets an empty array — an empty report is a report, not a missing one, so there is no 404 on this route.',
+    schema: {
+      type: 'array',
+      items: {
+        properties: {
+          id: {
+            type: 'string',
+            example: '550e8400-e29b-41d4-a716-446655440000',
+          },
+          recipient: { type: 'string', example: '09121234567' },
+          message: {
+            type: 'string',
+            description:
+              'The text that was sent, under the same name it was sent with.',
+            example: 'Your order has shipped.',
+          },
+          status: { type: 'string', example: 'SENT' },
+          serviceLevel: {
+            type: 'string',
+            enum: ['STANDARD', 'EXPRESS'],
+            example: 'STANDARD',
+          },
+          cost: {
+            type: 'number',
+            description:
+              'What one message costs at the current tariff. Bare, like the send response — `GET /api/sms/pricing` is where the currency is published.',
+            example: 1000,
+          },
+          sentAt: {
+            type: 'string',
+            format: 'date-time',
+            example: '2026-01-01T00:00:00.000Z',
+          },
+        },
+        required: [
+          'id',
+          'recipient',
+          'message',
+          'status',
+          'serviceLevel',
+          'cost',
+          'sentAt',
+        ],
+      },
+    },
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Missing or invalid JWT token',
+    schema: JwtUnauthorizedSchema,
+  })
+  async report(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<SentSmsReadModel[]> {
+    // The authenticated user is the only input, so there is no request-supplied
+    // identifier that could name somebody else's report and nothing here to
+    // authorize beyond the guard above.
+    return this.queryBus.execute(new GetSentSmsReportQuery(user.id));
   }
 }

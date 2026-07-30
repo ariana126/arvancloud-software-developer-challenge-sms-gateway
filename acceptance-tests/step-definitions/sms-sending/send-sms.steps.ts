@@ -6,6 +6,7 @@ import {
   EnsureSendRejectedForInsufficientCredit,
   EnsureSmsSent,
   EnsureTheCostOfOneSmsWasDeducted,
+  HaveAlreadySentAnSms,
   SendAnSms,
 } from '../../screenplay/sms-sending/send-sms';
 import { smsDetailsOf } from '../../screenplay/sms-sending/sms-details';
@@ -17,6 +18,20 @@ Given(
   "{actor}'s account credit is exactly the cost of one SMS",
   function (actor: Actor) {
     return actor.attemptsTo(StartWithJustEnoughCreditForOneSms());
+  },
+);
+
+// Passive voice — view-sent-sms-report.feature cares only *that* the message went out, so this
+// takes the API door where the `When` below drives the browser. Same goal, two voices, two doors,
+// deliberately side by side: this is what the blended split looks like when you can see both
+// halves at once. It lives here rather than with reporting for the reason the credit `Given`s live
+// with credit — sending is this file's domain, and Cucumber's step registry is global anyway.
+Given(
+  '{actor} has sent an SMS to {string}',
+  function (actor: Actor, recipient: string) {
+    return actor.attemptsTo(
+      HaveAlreadySentAnSms(smsDetailsOf(actor.name, recipient)),
+    );
   },
 );
 

@@ -11,5 +11,9 @@ model SmsMessage {
   serviceLevel String   @default("STANDARD") @map("service_level")
   sentAt       DateTime @map("sent_at") @db.Timestamptz(3)
 
+  // Every read of this table is one sender's report, scoped in the query rather
+  // than filtered afterwards. Without this index that predicate is a sequential
+  // scan over every user's messages to return one user's.
+  @@index([senderId])
   @@map("sms_message")
 }

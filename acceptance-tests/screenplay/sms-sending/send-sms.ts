@@ -15,9 +15,11 @@ import {
   Page,
   Text,
 } from '@serenity-js/web';
+import { LastResponse, PostRequest, Send } from '@serenity-js/rest';
 import {
   EnsureLoggedIn,
   LogIn,
+  TheirBearerToken,
   TheirOwnCredentials,
 } from '../authentication/log-in';
 import { FreezeTimeAt, theMomentScenariosFreezeTimeAt } from '../common/clock';
@@ -28,16 +30,20 @@ import {
 } from '../credit/account-credit';
 import { Form } from '../ui/form';
 import { SmsDetails } from './sms-details';
-import { LookUpTheCostOfOneSms, TheCostOfOneSms } from './sms-pricing';
+import {
+  LookUpTheCostOfOneSms,
+  StartWithJustEnoughCreditForOneSms,
+  TheCostOfOneSms,
+} from './sms-pricing';
 
 /**
- * Sending an SMS is what this product is for, so the one route modelled here is the one a person
- * takes: the browser (BDD in Action, ch10 reason 1). `using` follows the `SignUp.using` /
- * `LogIn.using` idiom — the goal is in the class name, the door is in the method name.
- *
- * There is no `viaApiUsing` yet, deliberately. `view-sent-sms-report.feature`'s passive
- * `Given {actor} has sent an SMS to {string}` is what will want one, and a goal-named class makes
- * that a one-method addition when that feature area is automated.
+ * Sending an SMS is what this product is for, so the route the scenarios *demonstrating* it take
+ * is the one a person takes: the browser (BDD in Action, ch10 reason 1). `using` follows the
+ * `SignUp.using` / `LogIn.using` idiom — the goal is in the class name, the door is in the method
+ * name — and `viaApiUsing` is its passive counterpart, added for
+ * `view-sent-sms-report.feature`'s `Given {actor} has sent an SMS to {string}`, where we care only
+ * *that* the message went out. Exactly the one-method addition the goal-named class was left open
+ * for.
  *
  * The parameter is a plain `SmsDetails` rather than the usual `Answerable<SmsDetails>`, so the
  * recipient can be read into the task description and the living documentation gets a sentence —
@@ -72,7 +78,76 @@ export class SendAnSms {
       SubmitTheSendSmsForm(),
     );
   };
+
+  /**
+   * Posts the details, and nothing else — no funding, no clock. Keeping it that way is what lets a
+   * scenario asserting a deduction use it without an invisible top-up moving the balance
+   * underneath it; establishing the credit is {@link HaveAlreadySentAnSms}'s job, above the send
+   * rather than inside it.
+   *
+   * Contract: `POST sms`, bearer-authenticated, body `{ recipient, message, serviceLevel? }`,
+   * `201 { id, cost, guaranteedDeliveryAt? }`. The same arrangement as the credit and pricing
+   * tasks: this door has no browser to carry a session, so the actor logs in immediately
+   * beforehand and reads the token off that response.
+   */
+  static viaApiUsing = (details: SmsDetails): Task =>
+    Task.where(
+      `#actor sends an${details.serviceLevel === 'express' ? ' express' : ''} SMS to ${details.recipient} (via the API)`,
+      notes<AccountNotes>().set('sms', details),
+      LogIn.viaApiUsing(TheirOwnCredentials()),
+      Send.a(
+        PostRequest.to('sms')
+          .with(theSendSmsRequestBody(details))
+          .using({ headers: { Authorization: TheirBearerToken() } }),
+      ),
+      // A precondition that fails to establish itself is the worst kind — the same reasoning as
+      // `AddCredit`. Without this, an unfunded or rejected send would surface much later as an
+      // empty report, which reads like the isolation rule working.
+      Ensure.that(LastResponse.status(), equals(201)),
+    );
 }
+
+/**
+ * What goes on the wire, which is **not** `SmsDetails`.
+ *
+ * Two mismatches, both enforced by `SendSmsDto`, and neither visible from the domain type:
+ * the API's service-level codes are upper case (`@IsIn(['STANDARD', 'EXPRESS'])`) where the domain
+ * word is lower case, and `forbidNonWhitelisted` is on, so an unrecognised value is a `400` rather
+ * than something quietly ignored. A standard send omits the field altogether instead of sending
+ * `STANDARD`: the DTO makes it optional and the controller applies the default, so leaving it out
+ * exercises the API the way a real client would.
+ *
+ * The translation lives here, at the edge, rather than changing `SmsDetails` — the domain type is
+ * read by the UI route too, where "express" is a checkbox and no wire code exists.
+ */
+const theSendSmsRequestBody = (details: SmsDetails) => ({
+  recipient: details.recipient,
+  message: details.message,
+  ...(details.serviceLevel === 'express'
+    ? { serviceLevel: 'EXPRESS' as const }
+    : {}),
+});
+
+/**
+ * The precondition behind `Given {actor} has sent an SMS to {string}` — an actor who has *already*
+ * sent one.
+ *
+ * It funds the send itself, and that is the point of it existing at all. `send-sms.feature` and
+ * `send-express-sms.feature` both open by granting credit; `view-sent-sms-report.feature`'s
+ * Background says only that Ariana is registered, and a freshly registered actor's balance is 0 —
+ * so a bare `POST sms` would come back `402 insufficient-credit` and the precondition would never
+ * establish. A `Given` may do whatever it takes to make its statement true, provided it goes
+ * through the front door, and topping up is an ordinary API call this suite already models.
+ *
+ * "Just enough for one SMS" rather than a round figure: the scenario states no balance, so
+ * inventing one would put a number in the automation that the Gherkin declined to state.
+ */
+export const HaveAlreadySentAnSms = (details: SmsDetails): Task =>
+  Task.where(
+    `#actor has already sent an SMS to ${details.recipient}`,
+    StartWithJustEnoughCreditForOneSms(),
+    SendAnSms.viaApiUsing(details),
+  );
 
 /**
  * Pins the backend clock at `theMomentScenariosFreezeTimeAt` and remembers it in the notepad, so

@@ -113,11 +113,20 @@ From a shell inside the container (`make sh`):
 
 ```bash
 npm test                                             # cucumber-js --tags 'not @wip'
-npx cucumber-js specs/registration/sign-up.feature   # one feature file
-npx cucumber-js specs/registration/sign-up.feature:20  # one scenario, by line number
+npx cucumber-js --name 'Successful sign-up'          # one scenario, by name
 npx cucumber-js --tags '@wip'                        # only @wip scenarios
+npx cucumber-js --dry-run --format summary           # parse and match steps, run nothing
 npx tsc --noEmit                                     # typecheck
 ```
+
+**A positional path does not narrow the run.** Under Cucumber 13 a path given on the command line
+is *merged* with `paths` in `cucumber.cjs`, not substituted for it, so
+`npx cucumber-js specs/registration/sign-up.feature` runs all 24 scenarios and prints a deprecation
+notice saying as much (`Current result: specs/**/*.feature, specs/registration/sign-up.feature`).
+The `:20` line-number suffix is merged the same way and narrows nothing either. Select with
+`--name` instead — it is a regex against the scenario name, and it is the only selector here that
+works today. A future major version will make the CLI argument override the config, at which point
+the positional forms start behaving as they read.
 
 `npm test` is `node --env-file=.env … cucumber-js`, and that flag is load-bearing: **it fails
 outright if `.env` is missing**, since Node exits on an unreadable `--env-file`. The `npx` forms

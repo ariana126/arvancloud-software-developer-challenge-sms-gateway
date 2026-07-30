@@ -20,20 +20,31 @@ export interface SmsDetails {
 }
 
 /**
- * The feature file names a recipient and nothing else, so the message body is derived here the
- * same way `signUpDetailsOf` derives an email — the scenario names a *person*, the task layer
- * works out the payload.
+ * What an actor's messages say — derived from their name, the same way `signUpDetailsOf` derives
+ * an email, so that one actor can work out another's message without being told it.
  *
- * The text is deliberately not part of any contract: the backend charges a flat `costPerSms`
- * rather than a length-derived price, so nothing in these scenarios depends on what the message
- * says. It is per-actor only so a report can tell whose message is whose.
+ * That derivability is load-bearing, not incidental. `view-sent-sms-report.feature`'s last line is
+ * "Fateme's SMS does not appear in Ariana's report", and it names no number: notepads are
+ * per-actor, so Ariana cannot read what Fateme wrote down, and the body is the only fact about
+ * Fateme's send that Ariana can reconstruct from the bare name. `EnsureReportExcludesAnySmsFrom`
+ * is the call site.
+ *
+ * Nothing else depends on the text: the backend charges a flat `costPerSms` rather than a
+ * length-derived price, so no scenario cares what a message says — only whose it is.
+ */
+export const messageFrom = (actorName: string): string =>
+  `Hello from ${actorName}`;
+
+/**
+ * The feature file names a recipient and nothing else, so the message body is derived here — the
+ * scenario names a *person*, the task layer works out the payload.
  */
 export const smsDetailsOf = (
   actorName: string,
   recipient: string,
 ): SmsDetails => ({
   recipient,
-  message: `Hello from ${actorName}`,
+  message: messageFrom(actorName),
   serviceLevel: 'standard',
 });
 
