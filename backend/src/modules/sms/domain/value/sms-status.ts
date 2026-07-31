@@ -79,6 +79,40 @@ export class SmsStatus extends ValueObject {
     return this.code === SmsStatus.SENT;
   }
 
+  /**
+   * The statuses this one may legally be reached from — the whole transition
+   * graph, in the one place that owns the vocabulary.
+   *
+   * **This exists because a message now has two writers.** The API marks it
+   * `QUEUED` after the broker acknowledges the publish; a worker consuming that
+   * lane marks it `SENT`. Those are separate processes racing on one row, and
+   * the worker frequently wins — at which point the API's `markQueued` would,
+   * without this, write `QUEUED` over a `SENT` it never saw and report a
+   * delivered message as undelivered for good. Forward-only is what makes the
+   * two orderings agree.
+   *
+   * `PENDING` is reachable from nothing: it is where a message starts, written
+   * in the same transaction as the charge, and nothing may ever return to it.
+   */
+  reachableFrom(): SmsStatus[] {
+    switch (this.code) {
+      case SmsStatus.PENDING: {
+        return [];
+      }
+      case SmsStatus.QUEUED: {
+        return [SmsStatus.pending()];
+      }
+      default: {
+        return [SmsStatus.pending(), SmsStatus.queued()];
+      }
+    }
+  }
+
+  /** Whether moving from `current` to this status is a step forward. */
+  canFollow(current: SmsStatus): boolean {
+    return this.reachableFrom().some((status) => status.equals(current));
+  }
+
   toString(): string {
     return this.code;
   }

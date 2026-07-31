@@ -105,6 +105,20 @@ acknowledgement from Kafka and nothing more; the worker consuming the lane is wh
 `SENT`. Collapsing the two back together would report messages as delivered while they sit on a
 partition.
 
+**The transitions are forward-only, and enforced twice.** `QUEUED` is written by the API once Kafka
+acknowledges the publish; `SENT` is written by a worker on the far side of the broker. Those are two
+processes racing on one row, and the worker frequently wins — so `SmsStatus.canFollow` refuses a
+backwards move in the aggregate, and `PrismaSmsMessageRepository` states the same rule again as a
+`WHERE status IN (…)` guard on every write. Neither alone is enough: the aggregate reasons about the
+row it read, and a row it read a moment ago is exactly what a racing writer invalidates.
+
+Skipping the SQL half is not theoretical. Before it existed, forty concurrent sends left **39 of 45
+messages stuck at `QUEUED`** with the consumer group fully caught up: every one had been delivered
+and marked `SENT`, and every one had that overwritten by the API's `markQueued` a moment later. The
+report filters on `SENT`, nothing revisits a settled message, and the outbox row was already gone —
+so a delivered SMS was reported as undelivered permanently. This is the fourth instance of the rule
+in `../../../CLAUDE.md`'s *Concurrency* section, and it arrived the same way the first three did.
+
 `PrismaSentSmsReportRepository` filters `status: 'SENT'`. Drop that predicate and the report starts
 announcing messages still in the outbox, ones sitting on a partition, and ones dead-lettered after
 the carrier refused them for good.
@@ -161,6 +175,25 @@ the exact outage the lanes exist to prevent.
 **One process, one lane.** A single process consuming all three would put express messages and a
 bulk backlog on the same event loop and the same connection pool — the arrangement the lanes exist
 to prevent. Scaling a lane is more replicas of that lane's container.
+
+**`KafkaTopicProvisioner` runs on `onModuleInit`, and that is not a stylistic choice.** Nest runs
+every `onApplicationBootstrap` in a module *concurrently* (`await Promise.all(...)` in
+`@nestjs/core/hooks/on-app-bootstrap.hook.js`), so listing the provisioner before
+`SmsDispatchConsumer` in `providers` orders nothing at all. When both used that hook,
+`consumer.subscribe()` won, asked for metadata on a topic that did not exist yet, and — with
+`KAFKA_AUTO_CREATE_TOPICS_ENABLE=false` — was answered `UNKNOWN_TOPIC_OR_PARTITION`. That killed the
+worker *and* the half-finished provisioner with it, so no topics were ever created, all three lanes
+stayed dead on every fresh broker, and the acceptance suite's reporting scenarios timed out waiting
+for a delivery nobody was going to make. Nest awaits all `onModuleInit` hooks before any
+`onApplicationBootstrap`; that is the only ordering guarantee available here.
+
+**And it fails the boot rather than warning.** The old leniency was written for an API, which must
+start without a broker because it has an outbox to accept sends into. This class is worker-only —
+`sms.module.ts` says so explicitly — and a worker without its topic can do nothing at all. Failing
+loudly, plus `restart: unless-stopped` on the three worker services, is what makes a cold start
+self-heal instead of leaving a lane silently unconsumed. Note what does *not* help here:
+`docker compose up --wait` reports a worker healthy the moment it is running, because the workers
+carry no healthcheck.
 
 **The retry budget is per lane, because a consumer retrying in place blocks its partition.** Express
 retries three times with a 200ms base; standard lanes retry five times with a 1s base. That makes it

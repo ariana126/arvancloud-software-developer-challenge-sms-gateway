@@ -53,9 +53,18 @@ services:
   # outright: `deleteOutDir` cannot rmdir a mount point). A production image would
   # bake `npm run build` in and drop this edge; here the bind mount is the whole
   # point of the dev stack, so the app is the compiler.
+  #
+  # **`restart: unless-stopped` on all three, and it is not boilerplate.** A
+  # worker fails its boot deliberately when it cannot declare or reach its lane
+  # topic, and without a restart policy that verdict is permanent: the container
+  # stays dead, `docker compose up --wait` still reports it healthy (a service
+  # with no healthcheck counts as ready the moment it is running), and the lane
+  # is silently unconsumed until somebody thinks to look. Restarting is what
+  # turns "the broker was not ready yet" from an outage into a retry.
   worker-express:
     build: .
     init: true
+    restart: unless-stopped
     command: npm run start:worker
     env_file:
       - .env
@@ -81,6 +90,7 @@ services:
   worker-bulk:
     build: .
     init: true
+    restart: unless-stopped
     command: npm run start:worker
     env_file:
       - .env
@@ -106,6 +116,7 @@ services:
   worker-shared:
     build: .
     init: true
+    restart: unless-stopped
     command: npm run start:worker
     env_file:
       - .env

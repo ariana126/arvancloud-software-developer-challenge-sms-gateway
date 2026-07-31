@@ -88,6 +88,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: make run-acceptance-tests
+      # The suite drives the backend through its API, so a dispatch worker that died at
+      # boot and one that is merely slow look identical to it — the sent-SMS report is
+      # empty either way. That difference lives only in the container logs, and without
+      # this step the job log could not tell the two apart. `failure()` rather than
+      # `always()`: a green run has no use for 500 lines of broker output.
+      - name: Dump backend test stack logs
+        if: failure()
+        run: make dump-test-logs
       # A failing suite still publishes what it managed to record, so the failure can
       # be read as living documentation rather than scraped out of the job log.
       # continue-on-error: if the suite never got far enough to start its container,

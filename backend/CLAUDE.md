@@ -309,6 +309,20 @@ that undercounts itself stays in the shared dispatch lane and swamps the custome
 to be separated from. Counting concurrently is the same problem as debiting concurrently, and it
 takes the same answer.
 
+**A fourth instance, and the one that shows how the rule gets broken.** `sms_message` has two
+writers: the API marks it `QUEUED` once the broker acknowledges the publish, and a worker on the far
+side of that broker marks it `SENT`. When Kafka arrived, `PrismaSmsMessageRepository` kept
+inheriting the base class's unconditional whole-state upsert — which had been correct, and was
+documented as correct, back when a message had exactly one writer. It now writes each status change
+as a guarded forward transition (`WHERE status IN (…)`, a zero-row result meaning somebody else got
+further first), with `SmsStatus.canFollow` stating the same rule in the domain.
+
+Two things to take from it. The failure was total and silent — forty concurrent sends left 39 of 45
+delivered messages reported as undelivered, permanently, because the report filters on `SENT` and
+nothing revisits a settled message. And **the premise that made the old code safe was written down
+and stopped being true without the code changing**: adding a second writer to an aggregate is the
+moment to re-read this section, not the moment to trust the comment above the class.
+
 ### Exception Handling
 
 All HTTP responses for errors use **RFC 9457 Problem Detail** (`application/problem+json`).

@@ -115,6 +115,65 @@ describe('SmsMessage', () => {
     expect(sut.releaseEvents()).toEqual([]);
   });
 
+  it('marking a message queued moves it to QUEUED', () => {
+    const sut = queue();
+    sut.markQueued();
+    expect(sut.toPrimitives()).toMatchObject({ status: 'QUEUED' });
+  });
+
+  it('a queued message can still be marked sent', () => {
+    const sut = queue();
+    sut.markQueued();
+    sut.markSent();
+    expect(sut.toPrimitives()).toMatchObject({ status: 'SENT' });
+  });
+
+  /**
+   * The API marks a message QUEUED after the broker acknowledges the publish,
+   * and a worker consuming that lane marks it SENT — two processes, one row,
+   * and the worker regularly gets there first. Letting QUEUED land afterwards
+   * would report a delivered message as undelivered for good, since the report
+   * filters on SENT and nothing ever revisits it.
+   */
+  it('marking a message queued after the carrier took it leaves it SENT', () => {
+    const sut = queue();
+    sut.markSent();
+    sut.releaseEvents();
+
+    sut.markQueued();
+
+    expect(sut.toPrimitives()).toMatchObject({ status: 'SENT' });
+    expect(sut.isSent()).toBe(true);
+  });
+
+  it('marking a message queued after it failed leaves it FAILED', () => {
+    const sut = queue();
+    sut.markFailed();
+    sut.markQueued();
+    expect(sut.toPrimitives()).toMatchObject({ status: 'FAILED' });
+  });
+
+  it('a sent message cannot be walked back to failed', () => {
+    const sut = queue();
+    sut.markSent();
+    sut.markFailed();
+    expect(sut.toPrimitives()).toMatchObject({ status: 'SENT' });
+  });
+
+  /**
+   * Delivery is at-least-once, so a redelivery of a message that was already
+   * settled is routine. It must not announce a second send.
+   */
+  it('marking an already-sent message sent again records no second event', () => {
+    const sut = queue();
+    sut.markSent();
+    sut.releaseEvents();
+
+    sut.markSent();
+
+    expect(sut.releaseEvents()).toEqual([]);
+  });
+
   it('the time of sending is the one supplied, not the machine clock', () => {
     const sut = queue();
     expect(sut.toPrimitives()).toMatchObject({ sentAt: SENT_AT });

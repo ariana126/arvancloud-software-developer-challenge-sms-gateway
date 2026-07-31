@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup up down restart build logs ps sh npm lint fix-lint format fix-format lint-architecture lint-swagger generate-swagger run-unit-tests reset test-setup test-up test-down test-reset
+.PHONY: help setup up down restart build logs ps sh npm lint fix-lint format fix-format lint-architecture lint-swagger generate-swagger run-unit-tests reset test-setup test-up test-down test-logs test-reset
 
 COMPOSE_TEST := docker compose --env-file .env.test -f docker-compose.yml -f docker-compose.test.yml
 
@@ -75,6 +75,19 @@ test-up: setup ## Build (if needed) and start the test stack (NODE_ENV=test), wa
 
 test-down: ## Stop and remove the test stack containers
 	$(COMPOSE_TEST) down
+
+# What an acceptance-suite failure needs and the suite itself cannot show. A worker that
+# dies at boot and a worker that is merely slow look identical from outside the API — the
+# report is empty either way — and the difference is only ever in here. `--no-color`
+# because the reader is usually a CI job log.
+#
+# `ps` first, and it is not redundant: this stack runs LOG_LEVEL=silent, so a *healthy*
+# worker prints nothing at all and its absence from the logs proves nothing. The status
+# line is what distinguishes "up and quietly consuming" from "restarting every two
+# seconds" — which is exactly the question a missing SMS raises.
+test-logs: ## Dump the test stack's container status and logs (what a failing acceptance run needs)
+	$(COMPOSE_TEST) ps --all
+	$(COMPOSE_TEST) logs --no-color --tail=500
 
 test-reset: ## Stop the test stack and wipe its database volume
 	$(COMPOSE_TEST) down -v

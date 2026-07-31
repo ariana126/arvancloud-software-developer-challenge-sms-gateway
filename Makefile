@@ -106,6 +106,12 @@ fix-violations: ## Apply every fix the guardrails would otherwise demand
 	@$(MAKE) generate-swagger
 	@$(MAKE) sync-api-contract
 
+# Not a gate, and deliberately absent from run-guardrails: nothing here can fail a build.
+# It exists because an acceptance failure and a dispatch worker that died at boot look
+# identical from outside the API, and the job log could not tell them apart.
+dump-test-logs: ## Dump the backend test stack's container logs (for diagnosing a failed acceptance run)
+	@$(MAKE) -C backend test-logs
+
 render-living-documentation: ## Render the living documentation from the last acceptance run
 	@$(MAKE) -C acceptance-tests render-living-documentation
 

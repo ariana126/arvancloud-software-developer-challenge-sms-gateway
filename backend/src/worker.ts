@@ -26,4 +26,22 @@ async function bootstrap() {
   app.useLogger(app.get(Logger));
   app.enableShutdownHooks();
 }
-void bootstrap();
+
+/**
+ * A boot that fails names the lane before it dies.
+ *
+ * `void bootstrap()` alone already exited non-zero — Node turns an unhandled
+ * rejection into an uncaught exception, which is what Compose's `restart:`
+ * policy watches — but what it printed was a bare kafkajs stack with no hint of
+ * which of the three lanes had died. The lanes are separate containers
+ * precisely so one can fail alone; a log that does not say which one wastes
+ * that.
+ *
+ * Rethrown rather than `process.exit`: the exit behaviour is identical, and the
+ * error keeps its stack for whoever reads the log next.
+ */
+bootstrap().catch((error: unknown) => {
+  const lane = process.env.WORKER_LANE ?? 'unnamed';
+  console.error(`The ${lane} dispatch worker could not start.`);
+  throw error;
+});

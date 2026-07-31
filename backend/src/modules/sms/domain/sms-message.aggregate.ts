@@ -65,9 +65,18 @@ export class SmsMessage extends AggregateRoot {
    * dispatch is durable and on its lane; the worker consuming that lane is what
    * eventually calls `markSent`. No event, because "we handed it to ourselves"
    * is not news to anybody downstream.
+   *
+   * **A no-op once the carrier has answered**, and quietly so. The worker
+   * consuming the lane often marks a message `SENT` before the API's
+   * post-publish transaction has committed `QUEUED`, and "the broker has it" is
+   * already implied by "the carrier took it" — so there is nothing to complain
+   * about and nothing to write. Throwing instead would be worse than useless:
+   * this runs inside `OutboxSmsDispatcher`'s settle transaction, so it would
+   * roll back the settle, leave the outbox row to be reclaimed, and republish
+   * the message as a duplicate.
    */
   public markQueued(): void {
-    this.status = SmsStatus.queued();
+    this.moveTo(SmsStatus.queued());
   }
 
   /**
@@ -75,9 +84,15 @@ export class SmsMessage extends AggregateRoot {
    * because that is when it becomes true — announcing a send at acceptance time
    * would tell the rest of the system a message went out that might still be
    * sitting in the outbox, or on a partition.
+   *
+   * The event is recorded only when the status actually moves, so a redelivery
+   * of an already-settled message — which at-least-once delivery makes routine
+   * — cannot announce a second `SmsSent` for one send.
    */
   public markSent(): void {
-    this.status = SmsStatus.sent();
+    if (!this.moveTo(SmsStatus.sent())) {
+      return;
+    }
     this.recordThat(
       new SmsSent(
         this.id.asString(),
@@ -94,7 +109,24 @@ export class SmsMessage extends AggregateRoot {
    * from.
    */
   public markFailed(): void {
-    this.status = SmsStatus.failed();
+    this.moveTo(SmsStatus.failed());
+  }
+
+  /**
+   * Moves the status forward, or refuses and says so.
+   *
+   * This is the rule *written*; `PrismaSmsMessageRepository` states it a second
+   * time in SQL, which is the only place a concurrent writer can be seen. The
+   * pair is deliberate and matches how `Wallet` and `PrismaWalletRepository`
+   * split the same job: an aggregate reasons about the state it read, and a
+   * state it read a moment ago is exactly what a racing writer invalidates.
+   */
+  private moveTo(next: SmsStatus): boolean {
+    if (!next.canFollow(this.status)) {
+      return false;
+    }
+    this.status = next;
+    return true;
   }
 
   public isSent(): boolean {
