@@ -30,6 +30,10 @@ The frontend has no such switch; what keeps it honest is `API_PROXY_TARGET`, whi
 Start them with `make -C ../backend test-up` and `make -C ../frontend test-up`, or let the root
 `make run-acceptance-tests` do the whole sequence: both test stacks up, this container up, suite run.
 
+> Decision, alternatives and trade-offs — why there are only two doors, and what it costs:
+> [ADR 14](../docs/adr/0014-acceptance-suite-uses-two-public-doors.md). The stacks those endpoints
+> exist on: [ADR 4](../docs/adr/0004-second-application-stack-for-tests.md).
+
 ## Which door a step goes through
 
 The suite is **blended** (BDD in Action, ch15): the browser where the browser is the point, HTTP
@@ -66,6 +70,10 @@ adding them would put an automation concern into a document written for the busi
 check them now watch the screen instead. Per ch13 §13.6, the shape of an error response is an
 API-design detail and belongs to the backend's own tests. `EnsureProblemDetail` remains, and is
 still the right tool for the three validation outlines.
+
+> How the browser door finds its elements, and the six structural selectors nothing gates:
+> [ADR 15](../docs/adr/0015-locate-ui-elements-by-accessible-name.md). The error contract those
+> assertions rest on: [ADR 7](../docs/adr/0007-rfc-9457-problem-details.md).
 
 ## Commands
 

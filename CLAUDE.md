@@ -25,6 +25,14 @@ A monorepo of independent projects, each with its own Makefile, Docker Compose s
 
 **Read the subproject's own CLAUDE.md before working inside it.** This file covers only what is cross-cutting.
 
+**And read [`docs/adr/`](docs/adr/README.md) for *why*.** Seventeen decision records — what was
+decided, what was rejected, what it cost, and which `make` target enforces it. This file and the
+subproject ones tell you *how*; the ADRs tell you why the constraint exists and what it would take
+to overturn it. Two of the seventeen record work deliberately left undone.
+
+> Why the repository is three self-contained projects rather than a workspace:
+> [ADR 2](docs/adr/0002-monorepo-of-independent-projects.md).
+
 ## Commands
 
 The root Makefile orchestrates the subprojects by delegating to their Makefiles. It holds no logic of its own — behaviour lives in each subproject.
@@ -158,6 +166,9 @@ it". So renaming the `field__error` class, dropping the `app-text-field` wrapper
 `<dl><div>` breaks the acceptance suite with no check failing first. Keep the no-`data-test`
 convention; just don't assume the a11y gate is protecting all of it.
 
+> Decision, alternatives and trade-offs, including the table of ungated selectors:
+> [ADR 15](docs/adr/0015-locate-ui-elements-by-accessible-name.md).
+
 `make up` does **not** migrate. The acceptance suite applies migrations itself (`POST /api/testing/migrations` in its `BeforeAll` hook), so `make run-acceptance-tests` is unaffected; run `make migrate` when driving the app by hand.
 
 `make migrate` reaches the dev stack only — it is `docker compose exec` against `nmk-backend`. The test
@@ -250,6 +261,9 @@ in-flight publish** — that, not a build failure, is the usual answer to "why d
 And the render step here is not `continue-on-error`, where `ci.yml`'s is: a render failure fails
 this job but never CI's.
 
+> Decision, alternatives and trade-offs — why no command is ever inlined into the workflow:
+> [ADR 3](docs/adr/0003-makefile-is-the-only-build-interface.md).
+
 ## The dependency runs one way
 
 `acceptance-tests` drives `backend` over HTTP and `frontend` through a browser, and knows nothing
@@ -284,3 +298,8 @@ The two spec checks compose: `lint-swagger` proves `backend/docs/openapi.json` m
 code, so `lint-api-contract` only has to prove the frontend's copy matches that file. Together they
 guarantee the generated client matches the running API. That is also why `fix-violations` runs
 `sync-api-contract` last — the copy is taken from an already-regenerated spec.
+
+> Decisions, alternatives and trade-offs:
+> [ADR 14](docs/adr/0014-acceptance-suite-uses-two-public-doors.md) for the two doors, and
+> [ADR 13](docs/adr/0013-frontend-depends-on-the-api-contract.md) for the contract-not-project
+> dependency and the two composing spec gates.

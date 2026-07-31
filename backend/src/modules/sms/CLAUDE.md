@@ -42,6 +42,9 @@ their network takes.
 not fail the request, because the send is paid for, recorded, and owed; the outbox row is the
 system's commitment to deliver it. `SmsDispatcher.dispatch` never throws for exactly this reason.
 
+> Decision, alternatives and trade-offs:
+> [ADR 9](../../../../docs/adr/0009-transactional-outbox-for-dispatch.md).
+
 ## The three lanes
 
 A lane is a **bulkhead**: its own topic, its own consumer group, its own worker process. That is the
@@ -75,6 +78,9 @@ that column's schema comment always promised it was for. A retry therefore trave
 message was classified into when it was accepted, rather than wherever its sender's rate has drifted
 to since.
 
+> Decision, alternatives and trade-offs:
+> [ADR 10](../../../../docs/adr/0010-three-kafka-dispatch-lanes.md).
+
 ## How a sender gets a tier
 
 `sms_sender_traffic` counts sends in a rolling window, one row per sender, and
@@ -94,6 +100,9 @@ the window over inside the same statement is why there is no sweeper and no cron
 `GET /api/sms/traffic` publishes the classification, the count, the window and the threshold — the
 last so a customer can see a reclassification coming. It publishes **no lane, no topic and no
 worker**: separate capacity is the promise, and the mechanism is ours to change.
+
+> Decision, alternatives and trade-offs:
+> [ADR 11](../../../../docs/adr/0011-derive-traffic-tier-at-read-time.md).
 
 ## Message states
 
@@ -125,6 +134,12 @@ the carrier refused them for good.
 
 `sentAt` is when the send was **accepted**, not when the carrier took it — which is what the express
 guarantee is measured from, so the promise does not slide when a carrier is slow.
+
+> Decision, alternatives and trade-offs:
+> [ADR 12](../../../../docs/adr/0012-queued-state-with-forward-only-transitions.md) — including the
+> half of that enforcement nothing currently tests. Why the report is served from the write database
+> at all, and what would change that:
+> [ADR 16](../../../../docs/adr/0016-serve-the-report-from-the-write-database.md).
 
 ## The outbox table
 
@@ -163,6 +178,10 @@ through it and live only in the tests.
 
 `OUTBOX_RELAY_ENABLED=false` turns the poller off; the acceptance test stack sets it (see
 `../../CLAUDE.md`).
+
+> Why there is no circuit breaker around the carrier, what that costs while there isn't one, and the
+> trigger that ends the deferral:
+> [ADR 17](../../../../docs/adr/0017-no-circuit-breaker-around-the-sms-provider.md).
 
 ## The workers
 

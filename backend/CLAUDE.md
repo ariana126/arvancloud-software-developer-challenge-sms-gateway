@@ -71,6 +71,9 @@ split guarantees the endpoint is unreachable on the dev stack while a run in pro
 dev data. The ports differ for the same reason: both stacks can be up at once, which is the normal
 state after `make up`.
 
+> Decision, alternatives and trade-offs:
+> [ADR 4](../docs/adr/0004-second-application-stack-for-tests.md).
+
 `make run-unit-tests` needs nothing running: it uses `docker compose run --rm --no-deps`, so the
 tests get a throwaway container with no database behind it and no published ports, which is why
 it is safe to run while `make up`'s stack owns 3000. The lint and format targets below work the
@@ -214,6 +217,9 @@ in-container `node_modules`/Prisma client after a schema change — is a rebuild
 
 This project implements **DDD + CQRS** with a strict layered structure. New features follow the same vertical-slice pattern as the `identity` module.
 
+> Decision, alternatives and trade-offs:
+> [ADR 5](../docs/adr/0005-ddd-cqrs-with-enforced-layer-boundaries.md).
+
 ### Layer Layout (per module)
 
 ```
@@ -323,6 +329,10 @@ nothing revisits a settled message. And **the premise that made the old code saf
 and stopped being true without the code changing**: adding a second writer to an aggregate is the
 moment to re-read this section, not the moment to trust the comment above the class.
 
+> Decision, alternatives and trade-offs:
+> [ADR 8](../docs/adr/0008-guarded-sql-deltas-for-concurrent-state.md), and
+> [ADR 12](../docs/adr/0012-queued-state-with-forward-only-transitions.md) for the fourth instance.
+
 ### Exception Handling
 
 All HTTP responses for errors use **RFC 9457 Problem Detail** (`application/problem+json`).
@@ -355,6 +365,9 @@ separate places — `problem-detail.ts`, the Swagger error schemas, and once mor
 outside this one — with no shared constant between them. Changing it here alone breaks the other
 copies silently. Extension members are spread at the **top level** of the response body, not nested
 under a key.
+
+> Decision, alternatives and trade-offs:
+> [ADR 7](../docs/adr/0007-rfc-9457-problem-details.md).
 
 ### Architecture linting
 
@@ -397,6 +410,10 @@ mappers (see `src/framework/CLAUDE.md`). Two mechanics worth knowing when a rule
 unexpectedly: `no-circular` ignores cycles routed through an `index.ts`, and
 `tsPreCompilationDeps` is on, so a type-only `import type` still counts as a dependency.
 `*.spec.ts` files are excluded from the graph entirely.
+
+> Decision, alternatives and trade-offs for the carve-out:
+> [ADR 6](../docs/adr/0006-cross-module-dependencies-through-published-ports.md). For the rule set as
+> a whole: [ADR 5](../docs/adr/0005-ddd-cqrs-with-enforced-layer-boundaries.md).
 
 ### Testing
 

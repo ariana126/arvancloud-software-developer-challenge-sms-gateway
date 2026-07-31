@@ -187,6 +187,9 @@ module means editing this framework file to add its mapper — which is exactly 
 whitelisted exception in `.dependency-cruiser.cjs`, since it is the single place `framework` is
 allowed to name a feature module. Forget it and the new module's exceptions become 500s.
 
+> Decision, alternatives and trade-offs for the error contract as a whole:
+> [ADR 7](../../../docs/adr/0007-rfc-9457-problem-details.md).
+
 ### `JwtAuthGuard`
 Validates the `Authorization: Bearer <token>` header. Injects `{ sub: userId }` on the request object. Throws `UnauthorizedException` on missing or invalid tokens.
 

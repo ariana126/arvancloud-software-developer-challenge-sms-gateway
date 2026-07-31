@@ -260,6 +260,9 @@ one every time and so never shows the problem. Rebuild once with
 described for the backend's Prisma client, and it bites after any dependency change; a fresh clone
 and CI are unaffected.
 
+> Decision, alternatives and trade-offs — why this project depends on a contract rather than on
+> another project: [ADR 13](../docs/adr/0013-frontend-depends-on-the-api-contract.md).
+
 ## Directory layout
 
 ```
@@ -515,6 +518,10 @@ in, for any UI with state:
   focus to the first invalid field.
 
 A green `make lint-accessibility` means no _detectable_ violation. It is a floor, not a pass mark.
+
+> Decision, alternatives and trade-offs — why this project carries no `data-test` attributes, and
+> exactly where the gate stops protecting the markup that depends on it:
+> [ADR 15](../docs/adr/0015-locate-ui-elements-by-accessible-name.md).
 
 ## Editor / host node_modules
 

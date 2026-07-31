@@ -50,3 +50,19 @@ not import each other. `make lint-swagger` catches the committed API spec drifti
 Every check runs in CI as its own job, so a violation names itself. Locally,
 `make run-guardrails` runs all six gates cheapest-first, and `make fix-violations` applies every fix
 they would demand.
+
+---
+
+## The Decision Record
+
+The gates above validate that the code holds. They say nothing about *why* it is shaped this way —
+and that is the part no amount of tooling can reconstruct later.
+
+[`docs/adr/`](docs/adr/README.md) holds seventeen Architecture Decision Records: what was decided,
+which alternatives were rejected, what the decision cost, and which `make` target enforces it. Each
+one is a page or two.
+
+Two of the seventeen record work that was **deliberately not done** — separating the report's read
+load from the write database, and a circuit breaker around the SMS carrier — each with an explicit
+trigger for when to revisit it. An undocumented gap looks like an oversight; a dated deferral is a
+decision.
