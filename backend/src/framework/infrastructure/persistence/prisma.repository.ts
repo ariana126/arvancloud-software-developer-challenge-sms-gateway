@@ -5,6 +5,9 @@ import {
   Identity,
 } from '@framework/domain';
 import { EventBus, IEvent } from '@nestjs/cqrs';
+import { Prisma } from '@prisma/client';
+
+import { PrismaService } from './prisma.service';
 
 export interface ModelDelegate<PModel> {
   findUnique(args: { where: { id: string } }): Promise<PModel | null>;
@@ -15,15 +18,32 @@ export interface ModelDelegate<PModel> {
   }): Promise<PModel>;
 }
 
+/**
+ * Picks this repository's model off whichever client is current. A **selector**
+ * rather than the delegate itself, because `prisma.wallet` captured once in a
+ * constructor is bound to the connection and would keep writing outside any
+ * transaction opened later. Resolving per call is what lets `UnitOfWork` make a
+ * repository transactional without the repository knowing.
+ */
+export type DelegateSelector<PModel> = (
+  client: Prisma.TransactionClient,
+) => ModelDelegate<PModel>;
+
 export abstract class PrismaEntityRepository<
   T extends AggregateRoot,
   PModel extends { id: string },
 > extends EntityRepository<T> {
   constructor(
-    protected readonly delegate: ModelDelegate<PModel>,
+    private readonly selectDelegate: DelegateSelector<PModel>,
+    private readonly prismaService: PrismaService,
     private readonly eventBus: EventBus,
   ) {
     super();
+  }
+
+  /** Always read through this, never through a stored delegate. */
+  protected get delegate(): ModelDelegate<PModel> {
+    return this.selectDelegate(this.prismaService.client());
   }
 
   protected abstract toDomain(record: PModel): T;

@@ -82,10 +82,9 @@ export function toSubmissionErrors(
       // not quote amounts. Do not append a full stop — this string is the contract.
       return [formError('You do not have enough credit to send this SMS')];
 
-    case PROBLEM.concurrentModification:
-      // The balance moved under the request. Nothing was charged and the same attempt can simply be
-      // made again, which the generic fallback would describe as a connection problem instead.
-      return [formError('Your credit was being updated at the same time. Try sending again.')];
+    // There is deliberately no `concurrent-modification` case. The API used to answer 409 when two
+    // requests raced for the same wallet; it now applies each charge as one guarded statement, so a
+    // race resolves into a plain 402 for whoever lost it and there is no conflict left to report.
 
     default:
       return [formError(mapping.fallback)];

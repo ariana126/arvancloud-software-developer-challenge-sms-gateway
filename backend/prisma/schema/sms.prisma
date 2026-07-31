@@ -9,6 +9,10 @@ model SmsMessage {
   // column — that instant is derived from `sentAt` by `ServiceLevel`, and a
   // stored copy would be a second home for the express window, free to disagree.
   serviceLevel String   @default("STANDARD") @map("service_level")
+  // When the send was **accepted**, not when the carrier took it. A message is
+  // written PENDING in the same transaction as the charge and dispatched after
+  // it, so those are two different instants; this is the one the express
+  // guarantee is measured from, and the one the report orders by.
   sentAt       DateTime @map("sent_at") @db.Timestamptz(3)
 
   // Every read of this table is one sender's report, scoped in the query rather
@@ -16,4 +20,36 @@ model SmsMessage {
   // scan over every user's messages to return one user's.
   @@index([senderId])
   @@map("sms_message")
+}
+
+/// The transactional outbox: one row per message owed a dispatch, written in the
+/// same transaction as the charge and the message it belongs to.
+///
+/// `payload` is self-contained rather than a join back to `sms_message`, because
+/// a row that carries everything the carrier needs is a row a producer can
+/// publish as it stands — which is what makes Kafka a change of destination
+/// rather than a change of design. `type` names what the payload is for the same
+/// reason: it is the topic when there is one, and it lets integration events
+/// share this table later without a migration.
+///
+/// A settled dispatch is **deleted**. `sms_message` is already the audit record,
+/// and the poller's index stays small — which is the whole performance story for
+/// a table that is read every few seconds and, in the normal case, is empty.
+model SmsOutbox {
+  id      String @id @default(uuid())
+  type    String
+  payload Json
+
+  /// PENDING (due, unclaimed) → IN_FLIGHT (someone is attempting it) → deleted,
+  /// or → DEAD once we stop trying.
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @map("next_attempt_at") @db.Timestamptz(3)
+  claimedAt     DateTime? @map("claimed_at") @db.Timestamptz(3)
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @map("created_at") @db.Timestamptz(3)
+
+  // The claim query's predicate, and the only way this table is ever read.
+  @@index([status, nextAttemptAt])
+  @@map("sms_outbox")
 }

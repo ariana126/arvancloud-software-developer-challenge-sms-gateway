@@ -18,7 +18,7 @@ export class PrismaUserRepository
     private readonly prisma: PrismaService,
     eventBus: EventBus,
   ) {
-    super(prisma.user, eventBus);
+    super((client) => client.user, prisma, eventBus);
   }
 
   protected toDomain(record: PrismaUser): User {
@@ -30,7 +30,10 @@ export class PrismaUserRepository
   }
 
   async findByEmail(email: Email): Promise<User | null> {
-    const record = await this.prisma.user.findUnique({
+    // `client()` rather than `prisma.user`, for the same reason the base class
+    // resolves its delegate per call: this must see an ambient transaction's
+    // uncommitted writes when there is one.
+    const record = await this.prisma.client().user.findUnique({
       where: { email: email.asString() },
     });
     return record ? this.toDomain(record) : null;

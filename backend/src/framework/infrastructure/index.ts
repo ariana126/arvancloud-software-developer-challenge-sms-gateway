@@ -20,3 +20,4 @@ export { TestingModule } from './http/testing/testing.module';
 export { PrismaModule } from './persistence/prisma.module';
 export { PrismaEntityRepository } from './persistence/prisma.repository';
 export { PrismaService } from './persistence/prisma.service';
+export { PrismaUnitOfWork } from './persistence/prisma-unit-of-work';

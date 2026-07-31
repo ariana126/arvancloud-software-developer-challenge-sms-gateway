@@ -32,6 +32,13 @@ export interface AccountNotes {
   sms: SmsDetails;
 
   /**
+   * The HTTP status each of two simultaneous sends answered with. Kept here rather than read off
+   * `LastResponse`, because the whole point of that scenario is that two requests were in flight
+   * at once — there is no single "last response" to ask about.
+   */
+  sendOutcomes: number[];
+
+  /**
    * The instant, as an ISO-8601 string, that the backend clock was frozen at for a send — so an
    * assertion about a *future* guarantee has something in the system's own timeline to compare
    * against. The host's wall clock is no use here: the backend starts every scenario frozen in the

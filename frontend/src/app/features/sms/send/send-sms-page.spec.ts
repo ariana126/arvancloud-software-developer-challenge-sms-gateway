@@ -504,17 +504,6 @@ describe('SendSmsPage', () => {
       expect(control(page, 'recipient').getAttribute('aria-invalid')).toBe('true');
     });
 
-    it('names the real cause when the credit was being changed at the same time', async () => {
-      const page = await sendWith();
-
-      httpMock
-        .expectOne('/api/sms')
-        .flush({ type: PROBLEM.concurrentModification }, { status: 409, statusText: 'Conflict' });
-      await settle();
-
-      expect(alertText(page)).toContain('Try sending again');
-    });
-
     it('shows the fallback in the alert when the connection drops, and stays put', async () => {
       const page = await sendWith();
 

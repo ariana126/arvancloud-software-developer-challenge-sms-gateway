@@ -5,7 +5,6 @@ import { Money } from '@credit/domain/value/money';
 import {
   AuthenticatedUser,
   CurrentUser,
-  domainErrorSchema,
   JwtAuthGuard,
   JwtUnauthorizedSchema,
   ValidationErrorSchema,
@@ -23,7 +22,6 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
-  ApiConflictResponse,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
@@ -51,14 +49,6 @@ export class CreditController {
   @ApiUnauthorizedResponse({
     description: 'Missing or invalid JWT token',
     schema: JwtUnauthorizedSchema,
-  })
-  @ApiConflictResponse({
-    schema: domainErrorSchema(
-      'concurrent-modification',
-      'Concurrent Modification',
-      409,
-      'Could not update the wallet: too many concurrent modifications.',
-    ),
   })
   async increase(
     @CurrentUser() user: AuthenticatedUser,

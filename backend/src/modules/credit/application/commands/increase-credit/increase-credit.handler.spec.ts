@@ -1,5 +1,3 @@
-import { ConcurrentModificationException } from '@credit/application/exceptions';
-import { WalletVersionConflict } from '@credit/domain/exception/wallet-version-conflict.exception';
 import { WalletRepository } from '@credit/domain/service/wallet.repository';
 import { Money } from '@credit/domain/value/money';
 import { Wallet } from '@credit/domain/wallet.aggregate';
@@ -10,7 +8,6 @@ import { IncreaseCreditHandler } from './increase-credit.handler';
 
 class FakeWalletRepository extends WalletRepository {
   public saved: Wallet[] = [];
-  public saveOutcomes: Array<'ok' | 'conflict'> = [];
   private storedBalance: Money | null;
 
   constructor(
@@ -22,8 +19,7 @@ class FakeWalletRepository extends WalletRepository {
   }
 
   // Reconstructs a fresh Wallet from the persisted balance on every call, the
-  // way a real repository would deserialize from storage — a stored increase()
-  // must never mutate an in-memory object a failed save() leaves behind.
+  // way a real repository deserializes a row.
   find(): Promise<Wallet | null> {
     return Promise.resolve(
       this.storedBalance ? new Wallet(this.userId, this.storedBalance) : null,
@@ -37,10 +33,6 @@ class FakeWalletRepository extends WalletRepository {
   }
 
   save(entity: Wallet): Promise<void> {
-    const outcome = this.saveOutcomes.shift() ?? 'ok';
-    if (outcome === 'conflict') {
-      return Promise.reject(WalletVersionConflict.forWallet(entity.id));
-    }
     this.saved.push(entity);
     this.storedBalance = entity.getBalance();
     return Promise.resolve();
@@ -76,33 +68,34 @@ describe('IncreaseCreditHandler', () => {
     );
   });
 
-  it('retries by re-reading the wallet after a version conflict, then succeeds', async () => {
+  /**
+   * There is no retry here to test, and that is the point worth pinning: the
+   * repository applies an increase as `balance = balance + amount`, so two
+   * concurrent top-ups both land and neither needs to detect the other. What
+   * the handler must still do is save exactly once.
+   */
+  it('saves once, with no retry loop around it', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Wallet.open(userId));
-    repository.saveOutcomes = ['conflict', 'ok'];
+    const saveSpy = jest.spyOn(repository, 'save');
     const sut = new IncreaseCreditHandler(repository);
 
     await sut.execute(new IncreaseCreditCommand(userId, Money.rials(1000)));
 
-    expect(repository.saved).toHaveLength(1);
-    expect(repository.saved[0].getBalance().equals(Money.rials(1000))).toBe(
-      true,
-    );
+    expect(saveSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('gives up after exhausting all attempts and throws ConcurrentModificationException', async () => {
+  it('records the increase as a domain event for the repository to apply', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Wallet.open(userId));
-    repository.saveOutcomes = ['conflict', 'conflict', 'conflict'];
     const sut = new IncreaseCreditHandler(repository);
 
-    await expect(
-      sut.execute(new IncreaseCreditCommand(userId, Money.rials(1000))),
-    ).rejects.toBeInstanceOf(ConcurrentModificationException);
-    expect(repository.saved).toHaveLength(0);
+    await sut.execute(new IncreaseCreditCommand(userId, Money.rials(1000)));
+
+    expect(repository.saved[0].releaseEvents()).toHaveLength(1);
   });
 
-  it('propagates any other error immediately, without retrying', async () => {
+  it('propagates a failure to save', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Wallet.open(userId));
     const unexpectedError = new Error('database is unreachable');

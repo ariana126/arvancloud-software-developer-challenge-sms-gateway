@@ -5,6 +5,7 @@ export { DomainException } from './exception/domain.exception';
 export { EntityNotFound } from './exception/entity-not-found.exception';
 export { Clock } from './service/clock';
 export { EntityRepository } from './service/entity.repository';
+export { UnitOfWork } from './service/unit-of-work';
 export { Email } from './value/email.vo';
 export { Identity } from './value/identity.vo';
 export { ValueObject } from './value-object';

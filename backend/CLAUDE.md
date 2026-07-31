@@ -153,6 +153,7 @@ every CI job can create its own env and run with no secrets.
 | `APP_PORT` | **Not in `.env.example`.** Defaults to 3000 via `${APP_PORT:-3000}` in Compose; `.env.test` sets 3001. |
 | `STUDIO_PORT` | **Not in `.env.example`.** Prisma Studio; defaults to 5555 the same way, test stack 5556. |
 | `LOG_LEVEL` | **Not in `.env.example`.** Overrides the pino level, defaulted in `app.module.ts`. The test stack sets `silent` to keep suite output readable. |
+| `OUTBOX_RELAY_ENABLED` | **Not in `.env.example`.** Anything but `false` leaves the SMS outbox relay polling; `.env.test.example` sets `false`. A poller sweeping a database the acceptance suite truncates between scenarios is a flake source with nothing to catch there, since the stand-in carrier never fails. |
 
 The bottom three are real and settable, but you will not find them by reading `.env.example` —
 only `.env.test.example` declares them. Their defaults live in `docker-compose.yml` and
@@ -231,6 +232,11 @@ shared `http/dto/` directory.
 - **`Identity`** / **`Email`** — core value objects; use `Identity.new()` and `Email.fromString()`.
 - **`EntityRepository<T>`** — abstract base: `find`, `get` (throws if missing), `save`.
 - **`PrismaEntityRepository<Domain, Prisma>`** — concrete Prisma base; subclasses implement `toDomain()` and `toPersistence()`. `save()` is an upsert keyed on `id`.
+- **`UnitOfWork`** — the domain port for "commit all of this together". It carries **no transaction
+  handle**: `PrismaUnitOfWork` puts the transaction in an `AsyncLocalStorage` that
+  `PrismaService.client()` reads, so repositories join it without being told, and no port has to
+  grow a Prisma-shaped parameter. `SendSmsHandler` is the case that bought it — a debit and two SMS
+  writes, across two modules, in one commit. Re-entrant by *joining*, never by nesting.
 - **`Clock`** — the domain port for "what time is it". **Never call `new Date()` in a handler or an aggregate**; inject `Clock` and call `now()`. `ClockModule` is `@Global()` and binds the real `SystemClock` everywhere except `NODE_ENV=test`, where it binds a `TunableClock` that the testing endpoints drive. `RegisterUserHandler`, `JwtTokenService` and `JwtAuthGuard` all depend on it, which is what makes token expiry testable.
 - **`ProblemDetail`** / **`HttpExceptionFilter`** / **`ExceptionMapper`** — the RFC 9457 error pipeline; see *Exception Handling* below.
 - **`AuthModule`** — global module providing `JwtModule` (configured from `JWT_SECRET`) and `JwtAuthGuard`; imported once in `AppModule`, available everywhere without re-importing.
@@ -247,6 +253,26 @@ Controller → CommandBus → CommandHandler → Aggregate.factory() → Reposit
                                                                       ↓
                                                               EventBus.publish(events)
 ```
+
+### Concurrency, and the two rules that keep money honest
+
+Two decisions in this codebase exist purely because more than one request can arrive at once, and
+both are easy to undo by accident.
+
+**A wallet is never written as a whole state.** `PrismaWalletRepository` translates the aggregate's
+recorded events into conditional deltas — an increase is `balance = balance + amount`, a decrease is
+`balance = balance - amount` **guarded by `balance >= amount`**, and a zero-row result becomes
+`InsufficientCredit`. Persisting `getBalance()` instead is the lost update it exists to prevent: two
+requests read 1000, both subtract in memory, both write 0, and one SMS has been given away. The
+guard is therefore stated twice on purpose — once in `Wallet.decrease`, which fails fast with the
+numbers a client needs, and once in SQL, which is the only place a concurrent writer can be seen.
+There is no version column and no retry loop; a conditional write does not race.
+
+**A send is charged, recorded and enqueued in one transaction.** `SendSmsHandler` wraps the debit,
+the `PENDING` message and an `sms_outbox` row in a single `UnitOfWork.execute`, then hands the
+message to the carrier *outside* it — a transaction held open across someone else's network keeps a
+wallet row locked for as long as their network takes. That commit is what makes it impossible to
+take money without recording what it was taken for. Details in `src/modules/sms/CLAUDE.md`.
 
 ### Exception Handling
 

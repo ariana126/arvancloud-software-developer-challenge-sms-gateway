@@ -9,6 +9,11 @@ import {
   HaveAlreadySentAnSms,
   SendAnSms,
 } from '../../screenplay/sms-sending/send-sms';
+import {
+  EnsureExactlyOneSendSucceeded,
+  EnsureTheOtherSendWasRejectedForInsufficientCredit,
+  SendTwoSmsAtTheSameMoment,
+} from '../../screenplay/sms-sending/send-sms-concurrently';
 import { smsDetailsOf } from '../../screenplay/sms-sending/sms-details';
 import { StartWithJustEnoughCreditForOneSms } from '../../screenplay/sms-sending/sms-pricing';
 
@@ -68,6 +73,30 @@ Then(
     return actor.attemptsTo(EnsureAccountCreditIs(amount));
   },
 );
+
+// The one send-SMS step that goes through the API rather than the browser, and not by preference:
+// a person cannot submit one form twice at the same moment, so there is no journey to demonstrate
+// here. See send-sms-concurrently.ts.
+When(
+  '{actor} sends two SMS to {string} at the same moment',
+  function (actor: Actor, recipient: string) {
+    return actor.attemptsTo(
+      SendTwoSmsAtTheSameMoment.viaApiUsing(
+        smsDetailsOf(actor.name, recipient),
+      ),
+    );
+  },
+);
+
+Then('exactly one of the sends succeeds', function () {
+  return actorInTheSpotlight().attemptsTo(EnsureExactlyOneSendSucceeded());
+});
+
+Then('the other is rejected due to insufficient credit', function () {
+  return actorInTheSpotlight().attemptsTo(
+    EnsureTheOtherSendWasRejectedForInsufficientCredit(),
+  );
+});
 
 Then('the send is rejected due to insufficient credit', function () {
   return actorInTheSpotlight().attemptsTo(

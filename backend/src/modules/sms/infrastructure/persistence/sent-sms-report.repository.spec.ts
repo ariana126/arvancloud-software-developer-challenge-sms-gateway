@@ -30,14 +30,21 @@ describe('PrismaSentSmsReportRepository', () => {
   // returned rows, because the database is what performs them: a fake that
   // sorted or filtered on their behalf would only be testing the fake. This is
   // the same trade PrismaWalletRepository's spec makes for its conditional write.
-  it('asks the database for one sender, newest first', async () => {
+  /**
+   * The `status` half matters as much as the `senderId` half: a message is
+   * written `PENDING` alongside the charge and only becomes `SENT` once the
+   * carrier has taken it, so without that predicate this report would announce
+   * messages still sitting in the outbox, and ones dead-lettered after the
+   * carrier refused them for good.
+   */
+  it('asks the database for one sender, sent messages only, newest first', async () => {
     const { prisma, smsMessage } = fakePrisma();
     const sut = new PrismaSentSmsReportRepository(prisma);
 
     await sut.findBySender(Identity.fromString('sender-1'));
 
     expect(smsMessage.findMany).toHaveBeenCalledWith({
-      where: { senderId: 'sender-1' },
+      where: { senderId: 'sender-1', status: 'SENT' },
       orderBy: { sentAt: 'desc' },
     });
   });

@@ -33,7 +33,7 @@ Start them with `make -C ../backend test-up` and `make -C ../frontend test-up`, 
 ## Which door a step goes through
 
 The suite is **blended** (BDD in Action, ch15): the browser where the browser is the point, HTTP
-everywhere else. Six of the twenty-four examples drive the UI. That ratio is deliberate, not a
+everywhere else. Six of the twenty-five examples drive the UI. That ratio is deliberate, not a
 staging post — ch10 puts UI tests at "a small minority" of an acceptance suite.
 
 | Scenario                     | Door                       | Why                                                                                                       |
@@ -44,6 +44,7 @@ staging post — ch10 puts UI tests at "a small minority" of an acceptance suite
 | Invalid email (×5)           | **API**                    | ch10's canonical waste case                                                                                 |
 | Missing data (×4)            | **API**                    | The form never submits an empty required field, so a UI version would document a *different* rule           |
 | Send SMS (×3)                | **UI**                     | ch10 reason 1: the journey this product exists for. Includes the insufficient-credit rejection, because the rule is about what the sender is *told* |
+| Two sends at the same moment | **API**                    | Not a preference: a person cannot submit one form twice simultaneously, so there is no journey to demonstrate. The rule is about the system, and what the loser is *told* is already covered by the row above |
 | Send express SMS             | **UI**                     | ch10 reason 3: the guaranteed delivery time is only worth something if it is *shown*                        |
 | Increase account credit      | **API**                    | Passive throughout; no screen-specific rule to demonstrate                                                  |
 | Sent SMS report (×2)         | **API**                    | Currently pending — no automation yet                                                                       |

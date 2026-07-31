@@ -1,7 +1,10 @@
+// No version column: a wallet is never written as an absolute balance, so there
+// is no lost update for optimistic locking to detect. Every change is applied as
+// a delta in one statement, and a decrease carries its own `balance >= amount`
+// guard — see `PrismaWalletRepository`.
 model Wallet {
   id      String @id
   balance Int
-  version Int    @default(0)
 
   @@map("credit_wallet")
 }

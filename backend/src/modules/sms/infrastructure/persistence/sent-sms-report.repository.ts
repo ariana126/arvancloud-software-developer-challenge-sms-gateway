@@ -6,6 +6,13 @@ import {
   SentSmsRecord,
   SentSmsReportRepository,
 } from '@sms/application/queries/get-sent-sms-report/sent-sms-report.repository';
+import { SmsStatus } from '@sms/domain/value/sms-status';
+
+/**
+ * Read off the domain type rather than written as a bare `'SENT'`, so the two
+ * cannot drift apart.
+ */
+const SENT = SmsStatus.sent().toString();
 
 /**
  * The read side's adapter: one `findMany`, straight at the table, with no
@@ -15,9 +22,14 @@ import {
  * every row into an `SmsMessage` only to read six fields back off it would cost
  * a crop of getters for no reader's benefit.
  *
- * Both halves of the port's contract are pushed into the query rather than
+ * Every half of the port's contract is pushed into the query rather than
  * applied after it:
  *
+ * - **`status: 'SENT'`** — this is a report of messages that *went out*. A
+ *   message is written `PENDING` alongside the charge and only becomes `SENT`
+ *   once the carrier has taken it, so without this predicate the report would
+ *   announce messages still sitting in the outbox, and ones that were
+ *   dead-lettered after the carrier refused them for good.
  * - **`where: { senderId }`** — the database returns one sender's rows and
  *   nothing else. Fetching more and filtering in JS would make a leak a matter
  *   of a later `map` staying correct, and would read rows this caller is not
@@ -37,7 +49,7 @@ export class PrismaSentSmsReportRepository extends SentSmsReportRepository {
 
   public async findBySender(senderId: Identity): Promise<SentSmsRecord[]> {
     const records = await this.prisma.smsMessage.findMany({
-      where: { senderId: senderId.asString() },
+      where: { senderId: senderId.asString(), status: SENT },
       orderBy: { sentAt: 'desc' },
     });
 

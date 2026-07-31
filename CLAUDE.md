@@ -128,9 +128,9 @@ step now fails the run rather than merely covering less. `test-up` rather than `
 that browser at the same backend the suite truncates between scenarios, instead of at the
 developer's dev stack.
 
-The suite is **blended**: six of its twenty-four examples drive the UI — the sign-up journey, the
+The suite is **blended**: six of its twenty-five examples drive the UI — the sign-up journey, the
 duplicate-email rejection, the three send-SMS scenarios and the express send — and the remaining
-eighteen stay black-box HTTP against the backend. That
+nineteen stay black-box HTTP against the backend. That
 split follows _BDD in Action_ ch10's four reasons to write a UI test, and the feature file itself
 knows nothing about it: each step's grammatical voice decides which door it goes through, so there
 are no `@ui`/`@api` tags to keep in sync. `acceptance-tests/CLAUDE.md` has the table and the

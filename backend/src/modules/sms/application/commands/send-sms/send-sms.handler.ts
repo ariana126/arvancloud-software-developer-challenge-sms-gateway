@@ -1,10 +1,11 @@
 import { CreditLedger } from '@credit/domain/service/credit-ledger';
 import { InsufficientCredit } from '@credit/domain/service/insufficient-credit.exception';
-import { Clock, Identity } from '@framework/domain';
+import { Clock, Identity, UnitOfWork } from '@framework/domain';
 import { CommandHandler, ICommandHandler } from '@nestjs/cqrs';
 import { InsufficientCreditException } from '@sms/application/exceptions';
+import { SmsDispatcher } from '@sms/domain/service/sms-dispatcher';
 import { SmsMessageRepository } from '@sms/domain/service/sms-message.repository';
-import { SmsProvider } from '@sms/domain/service/sms-provider';
+import { SmsOutboxRepository } from '@sms/domain/service/sms-outbox.repository';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
 import { SmsTariff } from '@sms/domain/sms-tariff';
 
@@ -14,8 +15,10 @@ import { SendSmsCommand } from './send-sms.command';
 export class SendSmsHandler implements ICommandHandler<SendSmsCommand> {
   constructor(
     private readonly creditLedger: CreditLedger,
-    private readonly smsProvider: SmsProvider,
     private readonly smsMessageRepository: SmsMessageRepository,
+    private readonly outbox: SmsOutboxRepository,
+    private readonly dispatcher: SmsDispatcher,
+    private readonly unitOfWork: UnitOfWork,
     private readonly clock: Clock,
   ) {}
 
@@ -23,10 +26,8 @@ export class SendSmsHandler implements ICommandHandler<SendSmsCommand> {
    * Returns the new message's id, what it cost, and — for an express send only —
    * the instant it is guaranteed to reach the operator. A command handler
    * returning a value is a deliberate CQS deviation, and the same one
-   * `LoginHandler` already makes: the id is minted inside `SmsMessage.send`, so
-   * no follow-up query could name the row that was just written. The
-   * alternative — having the controller read `SmsTariff.flat()` itself — would
-   * still not solve the id, and would put a second reader on the price.
+   * `LoginHandler` already makes: the id is minted inside `SmsMessage.queue`, so
+   * no follow-up query could name the row that was just written.
    *
    * `guaranteedDeliveryAt` is **absent**, not null, when the service level
    * promises nothing: a standard send makes no claim about when the message
@@ -38,37 +39,39 @@ export class SendSmsHandler implements ICommandHandler<SendSmsCommand> {
     guaranteedDeliveryAt?: string;
   }> {
     const tariff = SmsTariff.flat();
-
-    // Ordering: charge, then dispatch, then record. Charging first is what makes
-    // a short balance reject before anything leaves the building — the whole
-    // point of the sufficiency check, and the reason no message is dispatched
-    // that the sender cannot pay for.
-    //
-    // The accepted cost is the window it opens. If `deliver` throws after the
-    // charge has landed, the user stays charged for a message that never went
-    // out, and there is deliberately no refund path: a compensating
-    // `Wallet.refund` plus the idempotency machinery to keep a retry from
-    // double-refunding is out of scope for this slice. The same is true of a
-    // crash between the charge and the save, which additionally leaves the send
-    // unrecorded — `charge` and `save` are separate transactions with a network
-    // call between them, and the published `CreditLedger` port carries no
-    // transaction handle by design. Both trades are pinned by tests in this
-    // file's spec so they read as decisions rather than oversights.
-    await this.chargeFor(command.senderId, tariff);
-    await this.smsProvider.deliver(command.recipient, command.body);
-
-    const message = SmsMessage.send(
+    const message = SmsMessage.queue(
       command.senderId,
       command.recipient,
       command.body,
       command.serviceLevel,
       this.clock.now(),
     );
-    await this.smsMessageRepository.save(message);
 
-    // Rendered as ISO-8601 here for the same reason `id` is rendered as a string:
-    // this shape leaves the application layer, so it carries wire types rather
-    // than domain ones.
+    // Charge, record, and enqueue the dispatch — **one transaction**. Charging
+    // first is what makes a short balance reject before anything else happens;
+    // committing all three together is what makes it impossible to take money
+    // without also recording what it was taken for and what is now owed. A crash
+    // anywhere in here leaves nothing behind, which is the whole difference from
+    // the three separate writes this used to be.
+    //
+    // The carrier is deliberately outside it: a transaction held open across
+    // somebody else's network keeps a wallet row locked for as long as their
+    // network takes.
+    const dispatch = await this.unitOfWork.execute(async () => {
+      await this.chargeFor(command.senderId, tariff);
+      await this.smsMessageRepository.save(message);
+      return this.outbox.enqueue(message, this.clock.now());
+    });
+
+    // Attempted here, in the request, so that in the normal case the message
+    // really has gone by the time the sender is told. `dispatch` never throws —
+    // a carrier that refuses leaves the outbox row for the relay, and the send
+    // stays accepted, because it is: paid for, recorded, and owed.
+    await this.dispatcher.dispatch(dispatch);
+
+    // Rendered as ISO-8601 here for the same reason `id` is rendered as a
+    // string: this shape leaves the application layer, so it carries wire types
+    // rather than domain ones.
     const guaranteedDeliveryAt = message.guaranteedDeliveryAt();
 
     return {

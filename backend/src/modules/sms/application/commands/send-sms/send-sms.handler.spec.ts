@@ -1,9 +1,13 @@
 import { CreditLedger } from '@credit/domain/service/credit-ledger';
 import { InsufficientCredit } from '@credit/domain/service/insufficient-credit.exception';
-import { Clock, Identity } from '@framework/domain';
+import { Clock, Identity, UnitOfWork } from '@framework/domain';
 import { InsufficientCreditException } from '@sms/application/exceptions';
+import { SmsDispatcher } from '@sms/domain/service/sms-dispatcher';
 import { SmsMessageRepository } from '@sms/domain/service/sms-message.repository';
-import { SmsProvider } from '@sms/domain/service/sms-provider';
+import {
+  SmsDispatch,
+  SmsOutboxRepository,
+} from '@sms/domain/service/sms-outbox.repository';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
 import { MessageBody } from '@sms/domain/value/message-body';
 import { PhoneNumber } from '@sms/domain/value/phone-number';
@@ -34,26 +38,6 @@ class FakeCreditLedger extends CreditLedger {
   }
 }
 
-class FakeSmsProvider extends SmsProvider {
-  public readonly delivered: Array<{ recipient: string; body: string }> = [];
-  private failure: Error | null = null;
-
-  public failWith(error: Error): void {
-    this.failure = error;
-  }
-
-  deliver(recipient: PhoneNumber, body: MessageBody): Promise<void> {
-    if (this.failure) {
-      return Promise.reject(this.failure);
-    }
-    this.delivered.push({
-      recipient: recipient.asString(),
-      body: body.asString(),
-    });
-    return Promise.resolve();
-  }
-}
-
 class FakeSmsMessageRepository extends SmsMessageRepository {
   public readonly saved: SmsMessage[] = [];
 
@@ -71,6 +55,75 @@ class FakeSmsMessageRepository extends SmsMessageRepository {
   }
 }
 
+class FakeSmsOutboxRepository extends SmsOutboxRepository {
+  public readonly enqueued: SmsMessage[] = [];
+
+  enqueue(message: SmsMessage): Promise<SmsDispatch> {
+    this.enqueued.push(message);
+    return Promise.resolve({
+      id: `outbox-${this.enqueued.length}`,
+      messageId: message.id,
+      recipient: message.getRecipient(),
+      body: message.getBody(),
+      attempts: 1,
+    });
+  }
+
+  claimAbandoned(): Promise<SmsDispatch[]> {
+    return Promise.resolve([]);
+  }
+  settle(): Promise<void> {
+    return Promise.resolve();
+  }
+  reschedule(): Promise<void> {
+    return Promise.resolve();
+  }
+  deadLetter(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Stands in for `OutboxSmsDispatcher`, and keeps its contract: it never throws,
+ * because a carrier that refuses leaves the outbox row rather than failing the
+ * request. `failWith` makes it *record* a failure, not raise one.
+ */
+class FakeSmsDispatcher extends SmsDispatcher {
+  public readonly dispatched: SmsDispatch[] = [];
+  public readonly failed: SmsDispatch[] = [];
+  private failing = false;
+
+  public failSilently(): void {
+    this.failing = true;
+  }
+
+  dispatch(dispatch: SmsDispatch): Promise<void> {
+    if (this.failing) {
+      this.failed.push(dispatch);
+      return Promise.resolve();
+    }
+    this.dispatched.push(dispatch);
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Records the order things happened in, so a test can assert that the charge,
+ * the message and the outbox row were all written *before* the commit — the
+ * property that makes it impossible to take money without recording what for.
+ */
+class RecordingUnitOfWork extends UnitOfWork {
+  public executions = 0;
+  public committed = false;
+
+  async execute<T>(work: () => Promise<T>): Promise<T> {
+    this.executions++;
+    const result = await work();
+    this.committed = true;
+    return result;
+  }
+}
+
 class FixedClock extends Clock {
   constructor(private readonly instant: Date) {
     super();
@@ -83,24 +136,32 @@ class FixedClock extends Clock {
 
 function makeSut(
   ledger: FakeCreditLedger = new FakeCreditLedger(),
-  provider: FakeSmsProvider = new FakeSmsProvider(),
+  dispatcher: FakeSmsDispatcher = new FakeSmsDispatcher(),
   repository: FakeSmsMessageRepository = new FakeSmsMessageRepository(),
+  outbox: FakeSmsOutboxRepository = new FakeSmsOutboxRepository(),
+  unitOfWork: RecordingUnitOfWork = new RecordingUnitOfWork(),
 ): {
   sut: SendSmsHandler;
   ledger: FakeCreditLedger;
-  provider: FakeSmsProvider;
+  dispatcher: FakeSmsDispatcher;
   repository: FakeSmsMessageRepository;
+  outbox: FakeSmsOutboxRepository;
+  unitOfWork: RecordingUnitOfWork;
 } {
   return {
     sut: new SendSmsHandler(
       ledger,
-      provider,
       repository,
+      outbox,
+      dispatcher,
+      unitOfWork,
       new FixedClock(SENT_AT),
     ),
     ledger,
-    provider,
+    dispatcher,
     repository,
+    outbox,
+    unitOfWork,
   };
 }
 
@@ -140,15 +201,7 @@ describe('SendSmsHandler', () => {
     ]);
   });
 
-  it('the message is dispatched to the recipient with the given body', async () => {
-    const { sut, provider } = makeSut();
-
-    await sut.execute(commandFrom(Identity.new()));
-
-    expect(provider.delivered).toEqual([{ recipient: RECIPIENT, body: BODY }]);
-  });
-
-  it('the sent message is recorded with its sender, recipient, body and the time it was sent', async () => {
+  it('the message is recorded with its sender, recipient, body and the time it was accepted', async () => {
     const senderId = Identity.new();
     const { sut, repository } = makeSut();
 
@@ -159,9 +212,56 @@ describe('SendSmsHandler', () => {
       senderId: senderId.asString(),
       recipient: RECIPIENT,
       body: BODY,
-      status: 'SENT',
       sentAt: SENT_AT,
     });
+  });
+
+  /**
+   * The heart of the outbox: money, message and the obligation to deliver are
+   * one commit. Any of them landing without the others is the failure this
+   * design exists to rule out.
+   */
+  it('charges, records and enqueues the dispatch in a single transaction', async () => {
+    const { sut, ledger, repository, outbox, unitOfWork } = makeSut();
+
+    await sut.execute(commandFrom(Identity.new()));
+
+    expect(unitOfWork.executions).toBe(1);
+    expect(ledger.charges).toHaveLength(1);
+    expect(repository.saved).toHaveLength(1);
+    expect(outbox.enqueued).toHaveLength(1);
+  });
+
+  it('the message is written PENDING, because the carrier has not seen it yet', async () => {
+    const { sut, repository } = makeSut();
+
+    await sut.execute(commandFrom(Identity.new()));
+
+    expect(repository.saved[0].toPrimitives()).toMatchObject({
+      status: 'PENDING',
+    });
+  });
+
+  it('the enqueued dispatch is for the message that was just recorded', async () => {
+    const { sut, repository, outbox } = makeSut();
+
+    await sut.execute(commandFrom(Identity.new()));
+
+    expect(outbox.enqueued[0].id.equals(repository.saved[0].id)).toBe(true);
+  });
+
+  /**
+   * Outside the transaction, deliberately: a transaction held open across a
+   * carrier's network keeps a wallet row locked for as long as their network
+   * takes.
+   */
+  it('the dispatch is attempted after the transaction has committed', async () => {
+    const { sut, dispatcher, unitOfWork } = makeSut();
+
+    await sut.execute(commandFrom(Identity.new()));
+
+    expect(unitOfWork.committed).toBe(true);
+    expect(dispatcher.dispatched).toHaveLength(1);
   });
 
   it('sending answers with the new message id and what it cost', async () => {
@@ -219,19 +319,20 @@ describe('SendSmsHandler', () => {
   });
 
   it('a balance too short for one message dispatches nothing', async () => {
-    const { sut, provider } = makeSut(shortOn(400));
+    const { sut, dispatcher } = makeSut(shortOn(400));
 
     await expect(sut.execute(commandFrom(Identity.new()))).rejects.toThrow();
 
-    expect(provider.delivered).toHaveLength(0);
+    expect(dispatcher.dispatched).toHaveLength(0);
   });
 
-  it('a balance too short for one message records nothing', async () => {
-    const { sut, repository } = makeSut(shortOn(400));
+  it('a balance too short for one message records nothing and owes nothing', async () => {
+    const { sut, repository, outbox } = makeSut(shortOn(400));
 
     await expect(sut.execute(commandFrom(Identity.new()))).rejects.toThrow();
 
     expect(repository.saved).toHaveLength(0);
+    expect(outbox.enqueued).toHaveLength(0);
   });
 
   it("a short balance is reported as the sms module's own exception, not credit's", async () => {
@@ -256,37 +357,39 @@ describe('SendSmsHandler', () => {
     expect(rejection.available).toBe(400);
   });
 
-  // The no-refund trade, asserted rather than assumed: charging first is what
-  // stops an unaffordable message being dispatched, and the price of that order
-  // is that a provider failure leaves the sender charged for nothing. If a
-  // refund path is ever added, this test is the one that should fail first.
-  it('a provider failure records nothing, and the charge deliberately stands', async () => {
-    const provider = new FakeSmsProvider();
-    const providerFailure = new Error('provider is unreachable');
-    provider.failWith(providerFailure);
-    const { sut, ledger, repository } = makeSut(
+  /**
+   * The behaviour the outbox buys, and the reverse of what this handler used to
+   * do. A carrier that refuses no longer fails the request: the send is paid
+   * for, recorded and owed, the outbox row is left for the relay, and the sender
+   * is told their message was accepted — because it was.
+   */
+  it('a dispatch that fails still answers successfully, leaving the row to the relay', async () => {
+    const dispatcher = new FakeSmsDispatcher();
+    dispatcher.failSilently();
+    const { sut, ledger, repository, outbox } = makeSut(
       new FakeCreditLedger(),
-      provider,
+      dispatcher,
     );
 
-    await expect(sut.execute(commandFrom(Identity.new()))).rejects.toBe(
-      providerFailure,
-    );
+    const result = await sut.execute(commandFrom(Identity.new()));
 
-    expect(repository.saved).toHaveLength(0);
+    expect(result).toMatchObject({ cost: COST_PER_SMS });
+    expect(dispatcher.failed).toHaveLength(1);
     expect(ledger.charges).toHaveLength(1);
+    expect(repository.saved).toHaveLength(1);
+    expect(outbox.enqueued).toHaveLength(1);
   });
 
   it('an unexpected ledger failure propagates untranslated', async () => {
     const ledger = new FakeCreditLedger();
     const unexpectedError = new Error('database is unreachable');
     ledger.rejectWith(unexpectedError);
-    const { sut, provider } = makeSut(ledger);
+    const { sut, dispatcher } = makeSut(ledger);
 
     await expect(sut.execute(commandFrom(Identity.new()))).rejects.toBe(
       unexpectedError,
     );
 
-    expect(provider.delivered).toHaveLength(0);
+    expect(dispatcher.dispatched).toHaveLength(0);
   });
 });

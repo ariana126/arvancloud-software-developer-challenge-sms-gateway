@@ -1,4 +1,3 @@
-import { CreditExceptionMapper } from '@credit/infrastructure/http/exception.mapper';
 import { IdentityExceptionMapper } from '@identity/infrastructure/http/exception.mapper';
 import { ArgumentsHost, Catch, ExceptionFilter } from '@nestjs/common';
 import { SmsExceptionMapper } from '@sms/infrastructure/http/exception.mapper';
@@ -11,7 +10,11 @@ import { ProblemDetail } from './problem-detail';
 const ExceptionMappers: ExceptionMapper[] = [
   new FrameworkExceptionMapper(),
   new IdentityExceptionMapper(),
-  new CreditExceptionMapper(),
+  // No `CreditExceptionMapper`: credit raises `InsufficientCredit` across the
+  // published port and `SmsExceptionMapper` translates it for the caller that
+  // provoked it. Nothing else in that module reaches HTTP as its own problem
+  // type — the concurrency conflict it used to report is gone, because a
+  // conditional write cannot lose a race in the first place.
   new SmsExceptionMapper(),
 ];
 

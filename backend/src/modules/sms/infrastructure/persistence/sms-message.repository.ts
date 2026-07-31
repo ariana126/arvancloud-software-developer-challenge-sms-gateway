@@ -11,18 +11,20 @@ import { SmsMessage } from '@sms/domain/sms-message.aggregate';
 import { SmsMessageMapper } from './sms-message.mapper';
 
 /**
- * Inherits the base `save()` — an unconditional upsert keyed on `id` — and that
- * is safe **only because `SmsMessage` is append-only on a freshly minted UUID**.
- * Every save is the first and last write for that id, so there is no read,
- * no in-flight version, and no lost update to lose.
+ * Inherits the base `save()` — an unconditional upsert keyed on `id`.
  *
- * A mutable aggregate cannot rely on this. `PrismaWalletRepository` is the
- * counter-example: a wallet is read, modified and written back, so the base
- * upsert would let two requests both read balance-at-version-4 and both write,
- * silently double-spending. It therefore overrides `save()` with a
- * version-conditional `updateMany` whose zero-row result becomes a
- * `WalletVersionConflict`. Anything here that grows an update path must do the
- * same rather than inheriting this class's silence on the matter.
+ * A message **is** written twice now: once as `PENDING` alongside the charge,
+ * and again as `SENT` or `FAILED` once the carrier has answered. That is still
+ * safe to do unconditionally, but for a narrower reason than before: only one
+ * party is ever writing a given message. The id is freshly minted, and the
+ * second write is made by whoever holds the outbox claim for it — and the claim
+ * is exclusive. Two writers cannot race here because there are never two.
+ *
+ * `PrismaWalletRepository` is the counter-example, and the distinction is worth
+ * keeping straight: a wallet has many concurrent writers by nature, so it may
+ * never be written as a whole state. It writes guarded deltas instead. Anything
+ * here that grows a second writer must do the same rather than inheriting this
+ * class's silence on the matter.
  */
 @Injectable()
 export class PrismaSmsMessageRepository
@@ -30,7 +32,7 @@ export class PrismaSmsMessageRepository
   implements SmsMessageRepository
 {
   constructor(prisma: PrismaService, eventBus: EventBus) {
-    super(prisma.smsMessage, eventBus);
+    super((client) => client.smsMessage, prisma, eventBus);
   }
 
   protected toDomain(record: PrismaSmsMessage): SmsMessage {

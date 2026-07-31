@@ -62,6 +62,21 @@ Email value object with validation and normalisation.
 | `get(id: Identity)` | Returns `T` or throws `EntityNotFound` |
 | `save(entity: T)` | Persists and publishes domain events |
 
+### `UnitOfWork` (`domain/service/unit-of-work.ts`)
+`abstract class UnitOfWork { abstract execute<T>(work: () => Promise<T>): Promise<T> }` — runs
+`work` so everything it writes commits together or not at all.
+
+**The port carries no transaction handle**, deliberately. A handle would be a Prisma type, which
+`domain-pure` forbids the domain layer from naming, and it would have to be threaded through every
+port a transactional use case touches — including `CreditLedger`, whose published surface is two
+methods wide. The transaction is *ambient* instead: `PrismaUnitOfWork` puts it in an
+`AsyncLocalStorage` that `PrismaService.client()` reads, so repositories join it without being told.
+
+`execute` is **re-entrant by joining**: a nested call runs inside the transaction already in force
+rather than opening a second one, because Prisma exposes no savepoints and a second interactive
+transaction would take a second connection and deadlock against the first one's row locks. The
+outermost call owns the commit.
+
 ### `Clock` (`domain/service/clock.ts`)
 The port for "what time is it": `abstract class Clock { abstract now(): Date }`.
 
@@ -113,12 +128,29 @@ Concrete Prisma implementation. Subclasses must implement:
 there is no separate `add`. After a successful save the base class calls `entity.releaseEvents()`
 and publishes all events via `EventBus.publishAll()`.
 
-Constructor takes `(delegate: ModelDelegate, eventBus: EventBus)` — pass `prisma.<model>` as
-delegate. `ModelDelegate<PModel>` is a narrow structural type requiring only `findUnique` and
-`upsert`, which is what keeps the base class from depending on generated Prisma types.
+Constructor takes `(selectDelegate: DelegateSelector, prisma: PrismaService, eventBus: EventBus)`
+— pass `(client) => client.<model>`, **not** `prisma.<model>`. A delegate captured once in a
+constructor is bound to the connection and would keep writing outside any transaction opened later;
+resolving it per call through `PrismaService.client()` is what lets `UnitOfWork` make a repository
+transactional without the repository knowing. `ModelDelegate<PModel>` is a narrow structural type
+requiring only `findUnique` and `upsert`, which is what keeps the base class from depending on
+generated Prisma types.
+
+A subclass reaching past the base class for a query of its own (`PrismaUserRepository.findByEmail`)
+must go through `prisma.client()` for the same reason.
 
 ### `PrismaService`
 Extends `PrismaClient`. Provided globally by `PrismaModule` — never instantiate directly.
+
+It also owns the ambient-transaction store behind `UnitOfWork`:
+- `client()` — the transaction in force, or this connection. **Every repository read and write goes
+  through this**; `prisma.<model>` directly bypasses the transaction, so the write commits on its
+  own and no rollback can take it back.
+- `runInTransaction(tx, work)` / `inTransaction()` — used by `PrismaUnitOfWork`, not by features.
+
+### `PrismaUnitOfWork`
+`UnitOfWork` over `prisma.$transaction`. Bound by `PrismaModule`, which is `@Global()`, so a handler
+injects `UnitOfWork` without importing anything.
 
 ### `ProblemDetail`
 RFC 9457 problem detail builder.

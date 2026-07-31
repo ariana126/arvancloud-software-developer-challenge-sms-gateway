@@ -414,33 +414,6 @@
                 }
               }
             }
-          },
-          "409": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "example": "https://my-api-doc.dev/problems/concurrent-modification"
-                    },
-                    "title": {
-                      "type": "string",
-                      "example": "Concurrent Modification"
-                    },
-                    "status": {
-                      "type": "number",
-                      "example": 409
-                    },
-                    "detail": {
-                      "type": "string",
-                      "example": "Could not update the wallet: too many concurrent modifications."
-                    }
-                  }
-                }
-              }
-            }
           }
         },
         "security": [
@@ -648,33 +621,6 @@
                     "available": {
                       "type": "number",
                       "example": 400
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "example": "https://my-api-doc.dev/problems/concurrent-modification"
-                    },
-                    "title": {
-                      "type": "string",
-                      "example": "Concurrent Modification"
-                    },
-                    "status": {
-                      "type": "number",
-                      "example": 409
-                    },
-                    "detail": {
-                      "type": "string",
-                      "example": "Could not update the wallet: too many concurrent modifications."
                     }
                   }
                 }

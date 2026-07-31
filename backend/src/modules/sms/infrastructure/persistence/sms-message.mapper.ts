@@ -13,11 +13,11 @@ export class SmsMessageMapper {
       Identity.fromString(record.senderId),
       PhoneNumber.fromString(record.recipient),
       MessageBody.fromString(record.body),
-      // `SENT` is the only status this gateway ever writes, so reconstructing
-      // it is not lossy. A second status means a `SmsStatus.fromString` on the
-      // domain type and reading `record.status` here — until then, a factory
-      // that could only ever return one value would be dead code.
-      SmsStatus.sent(),
+      // Read back, now that a message has a life: it is written PENDING with
+      // the charge and only becomes SENT once the carrier has taken it, so
+      // assuming a status here would report messages as sent that are still
+      // sitting in the outbox — or that were dead-lettered.
+      SmsStatus.fromString(record.status),
       // Read back, unlike the status: there really are two service levels, and
       // which one a message was sent at is not recoverable from anything else.
       // There is no stored delivery guarantee to read — `ServiceLevel` derives

@@ -20,39 +20,78 @@ export class SmsMessage extends AggregateRoot {
   }
 
   /**
-   * Records a message that has been dispatched. `sentAt` is supplied by the
-   * caller from an injected `Clock` rather than read from the system clock —
-   * same as `User.register`.
+   * Accepts a message for sending: charged for, recorded, and owed a dispatch.
    *
-   * The service level is a parameter of the send rather than a second factory:
-   * express is how a message goes out, not a different thing to do with one, and
-   * it costs the same.
+   * **`queue`, not `send`** — the carrier has not seen it yet. This is written
+   * in the same transaction as the debit, before anything leaves the building,
+   * so that a crash can never take money without leaving a record of what it was
+   * taken for. `markSent` or `markFailed` closes it out afterwards.
+   *
+   * `sentAt` is supplied by the caller from an injected `Clock`, and is the
+   * instant the send was **accepted** rather than the instant the carrier took
+   * it. That is the honest reading for a delivery guarantee — express promises a
+   * window from when we took the message — and it means the express arithmetic
+   * in `ServiceLevel` needs no second timestamp.
+   *
+   * The service level is a parameter rather than a second factory: express is
+   * how a message goes out, not a different thing to do with one, and it costs
+   * the same.
    */
-  public static send(
+  public static queue(
     senderId: Identity,
     recipient: PhoneNumber,
     body: MessageBody,
     serviceLevel: ServiceLevel,
     sentAt: Date,
   ): SmsMessage {
-    const message = new SmsMessage(
+    return new SmsMessage(
       Identity.new(),
       senderId,
       recipient,
       body,
-      SmsStatus.sent(),
+      SmsStatus.pending(),
       serviceLevel,
       sentAt,
     );
-    message.recordThat(
+  }
+
+  /**
+   * The carrier took it. `SmsSent` is recorded **here** rather than in `queue`,
+   * because that is when it becomes true — announcing a send at acceptance time
+   * would tell the rest of the system a message went out that might still be
+   * sitting in the outbox.
+   */
+  public markSent(): void {
+    this.status = SmsStatus.sent();
+    this.recordThat(
       new SmsSent(
-        message.id.asString(),
-        senderId.asString(),
-        recipient.asString(),
-        sentAt,
+        this.id.asString(),
+        this.senderId.asString(),
+        this.recipient.asString(),
+        this.sentAt,
       ),
     );
-    return message;
+  }
+
+  /**
+   * We have stopped trying. No event: nothing downstream has a use for it today,
+   * and the dead-lettered outbox row is the record an operator actually works
+   * from.
+   */
+  public markFailed(): void {
+    this.status = SmsStatus.failed();
+  }
+
+  public isSent(): boolean {
+    return this.status.isSent();
+  }
+
+  public getRecipient(): PhoneNumber {
+    return this.recipient;
+  }
+
+  public getBody(): MessageBody {
+    return this.body;
   }
 
   /**

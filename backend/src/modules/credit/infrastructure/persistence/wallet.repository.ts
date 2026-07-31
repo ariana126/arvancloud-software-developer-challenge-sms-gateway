@@ -1,34 +1,53 @@
-import { WalletVersionConflict } from '@credit/domain/exception/wallet-version-conflict.exception';
+import { CreditDecreased } from '@credit/domain/events/credit-decreased.event';
+import { CreditIncreased } from '@credit/domain/events/credit-increased.event';
+import { InsufficientCredit } from '@credit/domain/service/insufficient-credit.exception';
 import { WalletRepository } from '@credit/domain/service/wallet.repository';
 import { Wallet } from '@credit/domain/wallet.aggregate';
+import { DomainEvent, Identity } from '@framework/domain';
 import {
   PrismaEntityRepository,
   PrismaService,
 } from '@framework/infrastructure';
 import { Injectable } from '@nestjs/common';
 import { EventBus, IEvent } from '@nestjs/cqrs';
-import { Prisma, Wallet as PrismaWallet } from '@prisma/client';
+import { Wallet as PrismaWallet } from '@prisma/client';
 
 import { WalletMapper } from './wallet.mapper';
 
 /**
- * A wallet's version is a pure persistence concern (see the domain-layer
- * plan) and is never exposed on the `Wallet` aggregate itself, so it can't be
- * carried alongside the entity the way `toPrimitives()` carries `id`/`balance`.
- * Instead this repository remembers, per loaded instance, which version it
- * was read at — a `WeakMap` rather than a field on `Wallet`, so no domain
- * code (or `WalletMapper`) ever needs to know a version exists. An instance
- * absent from the map has never been persisted, i.e. it came from
- * `Wallet.open()`, and `save()` treats that as an insert rather than a
- * conditional update.
+ * Persists a wallet as **conditional deltas**, not as a balance.
+ *
+ * The aggregate has already decided what should happen and recorded it —
+ * `CreditIncreased`, `CreditDecreased` — so this translates each event into one
+ * statement the database applies atomically:
+ *
+ * - an increase becomes `balance = balance + amount` (an upsert, since the first
+ *   top-up is also what opens the wallet);
+ * - a decrease becomes `balance = balance - amount` **guarded by
+ *   `balance >= amount`**, and a zero-row result means the guard refused it.
+ *
+ * Writing `entity.getBalance()` as an absolute value instead — which is what the
+ * inherited upsert would do — is the lost update this exists to prevent: two
+ * requests read 1000, both subtract 1000 in memory, both write 0, and one SMS
+ * has been given away. Postgres serialises the two UPDATEs on the row lock and
+ * re-evaluates the loser's `WHERE` against the committed row under READ
+ * COMMITTED, so the second matches nothing and is told so.
+ *
+ * That guard duplicates `Wallet.decrease`'s check, and that is deliberate: the
+ * aggregate is where the rule is *written*, and where a short balance is
+ * rejected with the numbers to explain it; the database is where the rule is
+ * *enforced* when two requests arrive at once. Neither alone is enough — the
+ * aggregate cannot see a concurrent writer, and SQL cannot produce a domain
+ * error worth reading.
+ *
+ * There is no version column and no retry loop. A conditional write does not
+ * race, so there is no lost attempt to detect and repeat.
  */
 @Injectable()
 export class PrismaWalletRepository
   extends PrismaEntityRepository<Wallet, PrismaWallet>
   implements WalletRepository
 {
-  private readonly versions = new WeakMap<Wallet, number>();
-
   constructor(
     private readonly prisma: PrismaService,
     // Named distinctly from the base class's own private `eventBus` field —
@@ -36,67 +55,81 @@ export class PrismaWalletRepository
     // hierarchy as incompatible declarations, not a normal override.
     private readonly domainEventBus: EventBus,
   ) {
-    super(prisma.wallet, domainEventBus);
+    super((client) => client.wallet, prisma, domainEventBus);
   }
 
   protected toDomain(record: PrismaWallet): Wallet {
-    const wallet = WalletMapper.toDomain(record);
-    this.versions.set(wallet, record.version);
-    return wallet;
+    return WalletMapper.toDomain(record);
   }
 
   protected toPersistence(entity: Wallet): PrismaWallet {
     return WalletMapper.toPersistence(entity);
   }
 
+  /**
+   * A wallet with nothing recorded on it writes nothing — the honest answer for
+   * a bare `Wallet.open()`, since an unfunded wallet and an absent row are the
+   * same thing to every reader here.
+   *
+   * Events are published only once every statement has landed. A decrease that
+   * the database refuses throws out of the loop, so `CreditDecreased` is never
+   * announced for money that was not taken.
+   */
   async save(entity: Wallet): Promise<void> {
-    const { id, balance } = this.toPersistence(entity);
-    const knownVersion = this.versions.get(entity);
+    const events = entity.releaseEvents();
 
-    await (knownVersion === undefined
-      ? this.insert(entity, id, balance)
-      : this.updateWithVersionCheck(entity, id, balance, knownVersion));
+    for (const event of events) {
+      await this.apply(entity.id, event);
+    }
 
-    this.domainEventBus.publishAll(entity.releaseEvents() as IEvent[]);
+    this.domainEventBus.publishAll(events as IEvent[]);
   }
 
-  private async insert(
-    entity: Wallet,
-    id: string,
-    balance: number,
-  ): Promise<void> {
-    try {
-      const created = await this.prisma.wallet.create({
-        data: { id, balance, version: 0 },
-      });
-      this.versions.set(entity, created.version);
-    } catch (error) {
-      // Another request opened the same wallet first — its row now exists,
-      // so this insert lost the race. Surfacing it as a version conflict lets
-      // the caller's retry loop re-read and continue as an update instead.
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw WalletVersionConflict.forWallet(entity.id);
-      }
-      throw error;
+  private async apply(id: Identity, event: DomainEvent): Promise<void> {
+    if (event instanceof CreditIncreased) {
+      await this.credit(id, event.amount);
+      return;
+    }
+    if (event instanceof CreditDecreased) {
+      await this.debit(id, event.amount);
     }
   }
 
-  private async updateWithVersionCheck(
-    entity: Wallet,
-    id: string,
-    balance: number,
-    knownVersion: number,
-  ): Promise<void> {
-    const result = await this.prisma.wallet.updateMany({
-      where: { id, version: knownVersion },
-      data: { balance, version: { increment: 1 } },
+  /**
+   * `upsert` rather than `update`, because the first top-up is what brings the
+   * row into existence. Prisma compiles this to a single
+   * `INSERT … ON CONFLICT DO UPDATE`, so two concurrent first-ever top-ups
+   * cannot both insert — the loser becomes the increment.
+   */
+  private async credit(id: Identity, amount: number): Promise<void> {
+    await this.prisma.client().wallet.upsert({
+      where: { id: id.asString() },
+      create: { id: id.asString(), balance: amount },
+      update: { balance: { increment: amount } },
     });
+  }
+
+  private async debit(id: Identity, amount: number): Promise<void> {
+    const result = await this.prisma.client().wallet.updateMany({
+      where: { id: id.asString(), balance: { gte: amount } },
+      data: { balance: { decrement: amount } },
+    });
+
     if (result.count === 0) {
-      throw WalletVersionConflict.forWallet(entity.id);
+      throw InsufficientCredit.forWallet(id, amount, await this.balanceOf(id));
     }
-    this.versions.set(entity, knownVersion + 1);
+  }
+
+  /**
+   * Read only to explain a refusal, so the extra round trip falls on the
+   * rejected path alone. It reports the balance *now* rather than the one the
+   * caller read a moment ago — which is the number that actually explains why
+   * the charge was refused.
+   */
+  private async balanceOf(id: Identity): Promise<number> {
+    const record = await this.prisma.client().wallet.findUnique({
+      where: { id: id.asString() },
+    });
+    return record?.balance ?? 0;
   }
 }

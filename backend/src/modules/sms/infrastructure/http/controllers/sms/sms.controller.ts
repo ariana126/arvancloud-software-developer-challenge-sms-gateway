@@ -11,7 +11,6 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
-  ApiConflictResponse,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
@@ -83,14 +82,6 @@ export class SmsController {
     status: 402,
     description: 'The balance does not cover one message; nothing is charged',
     schema: InsufficientCreditSchema,
-  })
-  @ApiConflictResponse({
-    schema: domainErrorSchema(
-      'concurrent-modification',
-      'Concurrent Modification',
-      409,
-      'Could not update the wallet: too many concurrent modifications.',
-    ),
   })
   async send(
     @CurrentUser() user: AuthenticatedUser,

@@ -1,5 +1,5 @@
-import { ConcurrentModificationException } from '@credit/application/exceptions';
-import { WalletVersionConflict } from '@credit/domain/exception/wallet-version-conflict.exception';
+import { CreditDecreased } from '@credit/domain/events/credit-decreased.event';
+import { CreditIncreased } from '@credit/domain/events/credit-increased.event';
 import { InsufficientCredit } from '@credit/domain/service/insufficient-credit.exception';
 import { WalletRepository } from '@credit/domain/service/wallet.repository';
 import { Money } from '@credit/domain/value/money';
@@ -11,18 +11,21 @@ import { WalletCreditLedger } from './wallet-credit-ledger';
 const COST_PER_SMS = 1000;
 
 /**
- * Models the database, not a cache. Every `find` reconstructs a fresh `Wallet`
- * from the stored balance, the way a real repository deserializes a row — so a
- * retry that re-reads sees whatever a competing writer left behind, and a fake
- * that handed back a stale in-memory aggregate would fail the interleaving
- * tests below.
+ * Models the database, not a cache — and in particular models the **guard**.
+ *
+ * `find` reconstructs a fresh `Wallet` from the stored balance, the way a real
+ * repository deserializes a row. `save` applies the aggregate's recorded events
+ * as deltas against whatever is stored *now*, refusing a decrease the stored
+ * balance no longer covers, exactly as `PrismaWalletRepository` has Postgres do.
+ *
+ * A fake that instead accepted `entity.getBalance()` would pass every test below
+ * while the real thing lost money, so this fidelity is the point of it.
  */
 class FakeWalletRepository extends WalletRepository {
   public readonly saved: Wallet[] = [];
-  public saveOutcomes: Array<'ok' | 'conflict'> = [];
   public reads = 0;
-  /** Runs when a save is rejected — stands in for the writer that won the race. */
-  public onConflict: (() => void) | null = null;
+  /** Runs just before a save is applied — stands in for a competing writer. */
+  public beforeSave: (() => void) | null = null;
 
   constructor(
     private readonly userId: Identity,
@@ -45,13 +48,32 @@ class FakeWalletRepository extends WalletRepository {
   }
 
   save(entity: Wallet): Promise<void> {
-    const outcome = this.saveOutcomes.shift() ?? 'ok';
-    if (outcome === 'conflict') {
-      this.onConflict?.();
-      return Promise.reject(WalletVersionConflict.forWallet(entity.id));
+    this.beforeSave?.();
+
+    const current = this.storedBalance ?? Money.rials(0);
+    let next = current;
+
+    for (const event of entity.releaseEvents()) {
+      if (event instanceof CreditIncreased) {
+        next = next.add(Money.rials(event.amount));
+      }
+      if (event instanceof CreditDecreased) {
+        const amount = Money.rials(event.amount);
+        if (!next.isAtLeast(amount)) {
+          return Promise.reject(
+            InsufficientCredit.forWallet(
+              entity.id,
+              event.amount,
+              next.asRials(),
+            ),
+          );
+        }
+        next = next.subtract(amount);
+      }
     }
+
+    this.storedBalance = next;
     this.saved.push(entity);
-    this.storedBalance = entity.getBalance();
     return Promise.resolve();
   }
 
@@ -72,10 +94,17 @@ describe('WalletCreditLedger', () => {
 
     await sut.charge(userId, COST_PER_SMS);
 
-    expect(repository.saved).toHaveLength(1);
-    expect(repository.saved[0].getBalance().equals(Money.rials(9000))).toBe(
-      true,
-    );
+    expect(repository.currentBalance()?.equals(Money.rials(9000))).toBe(true);
+  });
+
+  it('spending the last of the credit is allowed, and lands on zero', async () => {
+    const userId = Identity.new();
+    const repository = new FakeWalletRepository(userId, Money.rials(1000));
+    const sut = new WalletCreditLedger(repository);
+
+    await sut.charge(userId, COST_PER_SMS);
+
+    expect(repository.currentBalance()?.equals(Money.rials(0))).toBe(true);
   });
 
   it('charging against a wallet nobody has funded is rejected as insufficient credit', async () => {
@@ -103,30 +132,32 @@ describe('WalletCreditLedger', () => {
     expect(repository.currentBalance()?.equals(Money.rials(999))).toBe(true);
   });
 
-  it('a lost write is retried against a re-read wallet, and then succeeds', async () => {
+  /**
+   * One read and one write, on both the accepted and the rejected path. Pinned
+   * because the previous design spent two of each to reach the same answers, and
+   * a retry loop creeping back in is exactly the regression worth catching.
+   */
+  it('reads once and writes once, with no retry loop', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Money.rials(10_000));
-    repository.saveOutcomes = ['conflict', 'ok'];
     const sut = new WalletCreditLedger(repository);
 
     await sut.charge(userId, COST_PER_SMS);
 
-    expect(repository.reads).toBe(2);
+    expect(repository.reads).toBe(1);
     expect(repository.saved).toHaveLength(1);
-    expect(repository.saved[0].getBalance().equals(Money.rials(9000))).toBe(
-      true,
-    );
   });
 
-  // The interleaving the whole design exists for: attempt 1 reads a balance that
-  // covers the charge, a competing writer drains it and bumps the version, the
-  // conditional write is rejected, and attempt 2 must decide against the *drained*
-  // balance rather than the one it started from.
-  it('a charge that loses the race re-reads the drained balance and is rejected', async () => {
+  /**
+   * The interleaving the whole design exists for: the balance covered the charge
+   * when it was read, a competing writer drained it before the write landed, and
+   * the guard — not the aggregate — is what catches it. The rejection carries the
+   * balance as it stands at that instant, not the stale one.
+   */
+  it('a charge that loses the race is refused by the guard, against the drained balance', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Money.rials(1000));
-    repository.saveOutcomes = ['conflict'];
-    repository.onConflict = () => repository.drainTo(Money.rials(0));
+    repository.beforeSave = () => repository.drainTo(Money.rials(0));
     const sut = new WalletCreditLedger(repository);
 
     const rejection = (await sut
@@ -134,19 +165,19 @@ describe('WalletCreditLedger', () => {
       .catch((error: unknown) => error)) as InsufficientCredit;
 
     expect(rejection).toBeInstanceOf(InsufficientCredit);
-    // The balance it judged against was the post-drain one, not the stale 1000.
     expect(rejection.available).toBe(0);
     expect(rejection.required).toBe(COST_PER_SMS);
-    expect(repository.reads).toBe(2);
     expect(repository.saved).toHaveLength(0);
   });
 
-  it('two concurrent sends cannot both succeed against a balance that covers only one', async () => {
+  /**
+   * Both requests read the same 1000 before either writes — the lost-update
+   * setup. Exactly one may be charged, the other must be told why, and the
+   * balance must land on 0 rather than going negative.
+   */
+  it('two concurrent charges cannot both succeed against a balance that covers only one', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Money.rials(1000));
-    // Both requests read the same 1000 before either writes; the database
-    // accepts the first conditional write and rejects the second.
-    repository.saveOutcomes = ['ok', 'conflict'];
     const sut = new WalletCreditLedger(repository);
 
     const outcomes = await Promise.all([
@@ -164,29 +195,12 @@ describe('WalletCreditLedger', () => {
     const rejected = outcomes.filter((outcome) => outcome !== 'charged');
     expect(charged).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(
-      rejected[0] instanceof InsufficientCredit ||
-        rejected[0] instanceof ConcurrentModificationException,
-    ).toBe(true);
+    expect(rejected[0]).toBeInstanceOf(InsufficientCredit);
     expect(repository.saved).toHaveLength(1);
     expect(repository.currentBalance()?.equals(Money.rials(0))).toBe(true);
   });
 
-  it('gives up after three contended attempts, having charged nothing', async () => {
-    const userId = Identity.new();
-    const repository = new FakeWalletRepository(userId, Money.rials(10_000));
-    repository.saveOutcomes = ['conflict', 'conflict', 'conflict'];
-    const sut = new WalletCreditLedger(repository);
-
-    await expect(sut.charge(userId, COST_PER_SMS)).rejects.toBeInstanceOf(
-      ConcurrentModificationException,
-    );
-
-    expect(repository.saved).toHaveLength(0);
-    expect(repository.currentBalance()?.equals(Money.rials(10_000))).toBe(true);
-  });
-
-  it('any other save failure propagates immediately, without retrying', async () => {
+  it('propagates any other save failure untouched', async () => {
     const userId = Identity.new();
     const repository = new FakeWalletRepository(userId, Money.rials(10_000));
     const unexpectedError = new Error('database is unreachable');
@@ -199,7 +213,6 @@ describe('WalletCreditLedger', () => {
     await expect(sut.charge(userId, COST_PER_SMS)).rejects.toBe(
       unexpectedError,
     );
-
     expect(saveSpy).toHaveBeenCalledTimes(1);
   });
 });

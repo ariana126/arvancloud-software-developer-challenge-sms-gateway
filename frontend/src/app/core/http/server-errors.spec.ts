@@ -145,17 +145,6 @@ describe('toSubmissionErrors', () => {
     });
   });
 
-  describe('a concurrent modification', () => {
-    it('names the real cause and invites a retry, rather than blaming the connection', () => {
-      const [error] = map({ type: PROBLEM.concurrentModification });
-
-      expect(error.fieldTree).toBeUndefined();
-      expect(error.message).toBe(
-        'Your credit was being updated at the same time. Try sending again.',
-      );
-    });
-  });
-
   describe('anything else', () => {
     it('reports the fallback on the form when the failure is not a problem document', () => {
       expect(map(undefined)).toEqual([{ kind: SERVER_ERROR_KIND, message: FALLBACK }]);
