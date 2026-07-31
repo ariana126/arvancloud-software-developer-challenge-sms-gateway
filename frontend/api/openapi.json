@@ -793,6 +793,87 @@
           "SMS"
         ]
       }
+    },
+    "/api/sms/traffic": {
+      "get": {
+        "operationId": "SmsController_traffic",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Traffic is carried on isolated paths so that one customer's volume cannot delay another's. This reports which classification the caller falls into and the numbers behind it. A customer that has sent nothing recently reads as SHARED with a count of zero — a new customer and a quiet one are the same customer here.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "tier": {
+                      "type": "string",
+                      "enum": [
+                        "SHARED",
+                        "BULK"
+                      ],
+                      "description": "SHARED is the long tail; BULK is a high-volume sender, handled apart from it. BULK is not a lower priority — it is separate capacity.",
+                      "example": "SHARED"
+                    },
+                    "sendsInWindow": {
+                      "type": "number",
+                      "description": "Messages sent inside the window currently open.",
+                      "example": 12
+                    },
+                    "windowInSeconds": {
+                      "type": "number",
+                      "description": "How far back `sendsInWindow` reaches.",
+                      "example": 60
+                    },
+                    "bulkThreshold": {
+                      "type": "number",
+                      "description": "The count above which a sender is classified BULK, published so a customer can see it coming.",
+                      "example": 1000
+                    }
+                  },
+                  "required": [
+                    "tier",
+                    "sendsInWindow",
+                    "windowInSeconds",
+                    "bulkThreshold"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "example": "about:blank"
+                    },
+                    "title": {
+                      "type": "string",
+                      "example": "Unauthorized"
+                    },
+                    "status": {
+                      "type": "number",
+                      "example": 401
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get how the current user's send rate is currently classified",
+        "tags": [
+          "SMS"
+        ]
+      }
     }
   },
   "info": {

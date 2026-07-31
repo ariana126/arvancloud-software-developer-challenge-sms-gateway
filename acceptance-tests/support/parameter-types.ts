@@ -42,3 +42,17 @@ defineParameterType({
   regexp: /email|password|first name|last name/,
   transformer: (field: string) => fieldNames[field],
 });
+
+/**
+ * How the gateway classifies a customer's traffic, in the words the scenarios use.
+ *
+ * The phrases are carried through as plain strings and translated to the API's `SHARED` / `BULK`
+ * codes in `screenplay/sms-sending/sender-traffic.ts`, at the edge — the same place service levels
+ * are translated. A feature file saying "BULK" would be describing an enum rather than a business
+ * rule, and the enum is not the promise; being carried separately is.
+ */
+defineParameterType({
+  name: 'trafficClassification',
+  regexp: /shares capacity with other senders|is given capacity of its own/,
+  transformer: (classification: string) => classification,
+});

@@ -36,11 +36,25 @@ There are two Docker Compose projects, and `up`, `down` and `reset` act on **bot
 | Env file | `.env` (from `.env.example`) | `.env.test` (from `.env.test.example`) |
 | `NODE_ENV` | `development` | `test` |
 | App / Postgres port | 3000 / 5432 | 3001 / 5433 |
+| Kafka host port | 9092 | 9094 |
 | Logging | pretty-printed, `debug` | `LOG_LEVEL=silent` |
 
-`docker-compose.test.yml` is five lines long: it names the second Compose project and swaps the env
-file, nothing more. The test stack is the same image with different values. Separate ports and
-separate volumes are what make them independent.
+Each stack is **six services**: `app`, `db`, `kafka`, and one dispatch worker per lane
+(`worker-express`, `worker-bulk`, `worker-shared`). `docker-compose.test.yml` still only names the
+second Compose project and swaps the env file — it just has to say the latter four times now, since
+`env_file` is per service. The test stack is the same image with different values; separate ports
+and separate volumes are what make them independent, and the project name is what gives the test
+stack its own broker.
+
+**The workers wait for `app` to be healthy, and that is a build dependency, not a runtime one.**
+`dist/` is on the bind mount every container shares and `app`'s `nest start --watch` is what
+compiles it, `worker.js` included — so workers run `node dist/src/worker` rather than each running
+their own `nest start`, which would have four processes wiping and rewriting one `dist/`. Give a
+worker a private `/app/dist` volume to dodge that and it fails differently: `deleteOutDir` cannot
+`rmdir` a mount point. A production image would bake `npm run build` in and the edge disappears.
+
+That also means **a code change needs the workers restarted**, where `app` hot-reloads:
+`docker compose restart worker-express worker-bulk worker-shared`.
 
 Target the test stack on its own:
 
@@ -154,10 +168,21 @@ every CI job can create its own env and run with no secrets.
 | `STUDIO_PORT` | **Not in `.env.example`.** Prisma Studio; defaults to 5555 the same way, test stack 5556. |
 | `LOG_LEVEL` | **Not in `.env.example`.** Overrides the pino level, defaulted in `app.module.ts`. The test stack sets `silent` to keep suite output readable. |
 | `OUTBOX_RELAY_ENABLED` | **Not in `.env.example`.** Anything but `false` leaves the SMS outbox relay polling; `.env.test.example` sets `false`. A poller sweeping a database the acceptance suite truncates between scenarios is a flake source with nothing to catch there, since the stand-in carrier never fails. |
+| `KAFKA_BROKERS` | **Set in `docker-compose.yml`, not in any `.env`** — like `DATABASE_URL`, it is a fact about the Compose network (`kafka:9092`) rather than a preference. Read with `getOrThrow`, so a missing value is a boot failure; keeping it out of `.env` is what guarantees it can't go missing. |
+| `KAFKA_PORT` | Host port for the broker's EXTERNAL listener, for pointing a tool at it from outside. Nothing in the app uses it. Defaults to 9092; the test stack takes 9094 so both brokers can run at once. |
+| `SMS_BULK_TIER_THRESHOLD` | Sends per window above which a customer's standard traffic moves to its own dispatch lane. Defaults to **1000** in code; `.env.test.example` sets **3** so the acceptance suite can cross it in a handful of requests. |
+| `SMS_TRAFFIC_WINDOW_IN_SECONDS` | How far back that count reaches. Defaults to 60. |
+| `WORKER_LANE` | `EXPRESS`, `BULK` or `SHARED` — which lane a worker process consumes. Set per service in `docker-compose.yml`, never in an `.env`, since it is what distinguishes three containers built from one image. **Missing or unrecognised is a boot failure**, deliberately: a worker that defaulted would leave its real lane unconsumed while looking healthy. |
 
-The bottom three are real and settable, but you will not find them by reading `.env.example` —
-only `.env.test.example` declares them. Their defaults live in `docker-compose.yml` and
-`app.module.ts`.
+`LOG_LEVEL`, `OUTBOX_RELAY_ENABLED`, `APP_PORT` and `STUDIO_PORT` are real and settable, but you
+will not find them by reading `.env.example` — only `.env.test.example` declares them. Their
+defaults live in `docker-compose.yml` and `app.module.ts`. The two `SMS_*` variables are in **both**
+examples, and both have code defaults in `traffic-policy.provider.ts`, so an older `.env` still
+boots.
+
+Note that `ConfigService.get<number>` is a cast rather than a conversion — it hands back `'3'`
+where the type says `3`. `traffic-policy.provider.ts` converts at that boundary, because
+`TrafficPolicy.of` validates its arguments are integers and would otherwise fail at boot.
 
 ## Editor / host node_modules
 
@@ -268,11 +293,21 @@ guard is therefore stated twice on purpose — once in `Wallet.decrease`, which 
 numbers a client needs, and once in SQL, which is the only place a concurrent writer can be seen.
 There is no version column and no retry loop; a conditional write does not race.
 
-**A send is charged, recorded and enqueued in one transaction.** `SendSmsHandler` wraps the debit,
-the `PENDING` message and an `sms_outbox` row in a single `UnitOfWork.execute`, then hands the
-message to the carrier *outside* it — a transaction held open across someone else's network keeps a
-wallet row locked for as long as their network takes. That commit is what makes it impossible to
-take money without recording what it was taken for. Details in `src/modules/sms/CLAUDE.md`.
+**A send is charged, counted, recorded and enqueued in one transaction.** `SendSmsHandler` wraps the
+debit, the sender's traffic count, the `PENDING` message and an `sms_outbox` row in a single
+`UnitOfWork.execute`, then hands the message to the broker *outside* it — a transaction held open
+across someone else's network keeps a wallet row locked for as long as their network takes. That
+commit is what makes it impossible to take money without recording what it was taken for, and it is
+also why a rejected send cannot leave itself counted against its sender. Details in
+`src/modules/sms/CLAUDE.md`.
+
+**A third instance of the first rule, worth naming because it is easy to miss.**
+`PrismaSenderTrafficRepository.recordSend` is an `INSERT … ON CONFLICT DO UPDATE` whose `CASE`
+expressions both increment the counter and roll an expired window over, in one statement. A
+read-modify-write there would lose increments under precisely the load that matters — and a whale
+that undercounts itself stays in the shared dispatch lane and swamps the customers it was supposed
+to be separated from. Counting concurrently is the same problem as debiting concurrently, and it
+takes the same answer.
 
 ### Exception Handling
 
@@ -310,8 +345,9 @@ under a key.
 ### Architecture linting
 
 The DDD + CQRS layer boundaries are enforced by **dependency-cruiser** (`.dependency-cruiser.cjs`).
-Run `make lint-architecture`. Six rules: forbid cycles; keep the `domain` layer pure (no
-`application`/`infrastructure`, no NestJS/Prisma); stop `application` reaching into
+Run `make lint-architecture`. Seven rules: forbid cycles; keep the `domain` layer pure — two
+separate rules, one for `application`/`infrastructure` and one for
+**NestJS, Prisma and `kafkajs`**; stop `application` reaching into
 `infrastructure`; keep `framework` free of feature modules; keep modules from importing each
 other; and **`no-own-package-barrel`** — a file under `src/framework/{domain,application,infrastructure}/`
 must not import its own package's `index.ts`. That last one is the easiest to trip and the least
@@ -325,7 +361,7 @@ declare. Everything else (aggregates, value objects, handlers, controllers, pers
 module-private. The case that bought it: `sms` must charge a user's credit, and the alternatives
 were duplicating the balance, or making an in-process feature talk to itself over HTTP. A narrow
 port is cheaper than either. It is also why `InsufficientCredit` sits in
-`credit/domain/service/` rather than beside `WalletVersionConflict` in `credit/domain/exception/`
+`credit/domain/service/` rather than in a module-private `credit/domain/exception/`
 — a caller in another module has to be able to name the type to react to it, so it belongs on the
 seam. Bind the port with `@Global()` on the owning module (as `AuthModule` and `ClockModule` do)
 and export it: `sms.module.ts` importing `credit.module.ts` would be infrastructure reaching into
@@ -353,9 +389,11 @@ unexpectedly: `no-circular` ignores cycles routed through an `index.ts`, and
 **Unit tests** — Jest, co-located `*.spec.ts` files next to the code they test. Run via
 `make run-unit-tests` (not `make npm test` — prefer the targets, as above).
 
-Be aware of what that suite currently covers: every spec file lives under `src/framework/`, and
-`src/modules/` has **none** — the `identity` module is the reference implementation for structure,
-not for test coverage. A new module's handlers and aggregates are the first place to add some.
+Be aware of what that suite currently covers. `src/framework/`, `credit` and `sms` all carry specs;
+**`identity` carries none** — it is the reference implementation for structure, not for test
+coverage. The densest examples to copy are in `sms`: `dispatch-lane.spec.ts` for a pure domain rule,
+`send-sms.handler.spec.ts` for a handler with five fakes, and
+`sms-dispatch-consumer.spec.ts` for driving a Kafka consumer through a fake broker.
 
 **Testing-support endpoints** (`TestingModule`, `src/framework/infrastructure/http/testing/`) let an external test runner control the database and the clock between runs. All five return **204 No Content**:
 - `POST /api/testing/migrations` — runs `prisma migrate deploy`.

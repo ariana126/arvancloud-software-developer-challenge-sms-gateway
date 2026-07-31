@@ -32,6 +32,15 @@ export interface AccountNotes {
   sms: SmsDetails;
 
   /**
+   * The number of sends per window above which a customer's traffic is carried separately from
+   * the long tail's, looked up from the API rather than written down here — the test stack runs
+   * it far lower than production would, and a literal in this suite would be a copy of a
+   * configuration value it has no business knowing. A note for the same reason `costPerSms` is
+   * one: fetching it inside a question would clobber the `LastResponse` around it.
+   */
+  highVolumeThreshold: number;
+
+  /**
    * The HTTP status each of two simultaneous sends answered with. Kept here rather than read off
    * `LastResponse`, because the whole point of that scenario is that two requests were in flight
    * at once — there is no single "last response" to ask about.

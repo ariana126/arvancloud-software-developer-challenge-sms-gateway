@@ -7,6 +7,7 @@
 | Language | TypeScript |
 | Database | PostgreSQL |
 | ORM | Prisma |
+| Message broker | Apache Kafka (KRaft) |
 | Architecture | DDD + CQRS |
 | Auth | JWT + bcrypt |
 | Unit testing | Jest |
@@ -32,14 +33,26 @@ src/
 │           ├── testing/        # migrate/truncate endpoints — mounted only at NODE_ENV=test
 │           └── swagger/        # Reusable error schemas for @ApiResponse
 │
-└── modules/
-    └── identity/               # User registration and authentication
-        ├── domain/             # User aggregate, repository interface, service interfaces
-        ├── application/        # RegisterUserCommand, LoginCommand + handlers
-        └── infrastructure/     # Controllers, DTOs, Prisma repository, JWT/bcrypt impls
+├── modules/
+│   ├── identity/               # User registration and authentication
+│   │   ├── domain/             # User aggregate, repository interface, service interfaces
+│   │   ├── application/        # RegisterUserCommand, LoginCommand + handlers
+│   │   └── infrastructure/     # Controllers, DTOs, Prisma repository, JWT/bcrypt impls
+│   ├── credit/                 # Account credit — wallet aggregate, guarded debits
+│   └── sms/                    # Sending, dispatch lanes, and the sent-SMS report
+│       ├── domain/             # SmsMessage aggregate, DispatchLane, TrafficTier, ports
+│       ├── application/        # SendSmsCommand, report and traffic queries + handlers
+│       └── infrastructure/
+│           ├── kafka/          # Producer, topic map, topic provisioner
+│           ├── outbox/         # Transactional outbox dispatcher + recovery relay
+│           ├── worker/         # Dispatch consumer — runs in the worker processes
+│           └── persistence/    # Prisma repositories and mappers
+│
+├── main.ts                     # The API process
+└── worker.ts                   # A dispatch worker process — one lane each, no HTTP server
 
 prisma/
-├── schema/                     # Modular Prisma schema files (_config.prisma, identity.prisma)
+├── schema/                     # Modular Prisma schema files, one per module
 └── migrations/                 # SQL migration history
 
 docs/                           # Committed OpenAPI spec (openapi.json, openapi.yaml)
@@ -115,9 +128,9 @@ Swagger docs: http://localhost:3000/api-docs. Prisma Studio: `make npm db:studio
 ### Two stacks
 
 `make up` starts the development stack **and** an isolated test stack — the same image with a
-different env file, on ports 3001/5433 with `NODE_ENV=test` and its own database volume. Only the
-test stack mounts the endpoints that migrate and truncate the database, so no test run can reach
-development data. `make test-up`, `make test-down` and `make test-reset` target it on its own;
+different env file, on ports 3001/5433/9094 with `NODE_ENV=test` and its own database and broker
+volumes. Only the test stack mounts the endpoints that migrate and truncate the database, so no test
+run can reach development data. `make test-up`, `make test-down` and `make test-reset` target it on its own;
 `make down` and `make reset` act on both. Full detail in `CLAUDE.md`.
 
 ### Checks

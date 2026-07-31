@@ -72,6 +72,19 @@ export class ServiceLevel extends ValueObject {
     );
   }
 
+  /**
+   * Whether this level promises anything about delivery time at all.
+   *
+   * Phrased as the promise rather than as `isExpress` for the same reason
+   * `guaranteedDeliveryFrom` is: callers care that there is a guarantee to keep,
+   * not which of two names the level goes by. `DispatchLane.for` is the caller
+   * that needed it — a guaranteed message earns the isolated lane, and it earns
+   * it by being guaranteed rather than by being called express.
+   */
+  public guaranteesDelivery(): boolean {
+    return this.isExpress();
+  }
+
   private isExpress(): boolean {
     return this.code === ServiceLevel.EXPRESS;
   }

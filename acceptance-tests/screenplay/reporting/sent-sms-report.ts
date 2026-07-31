@@ -1,4 +1,11 @@
-import { Question, QuestionAdapter, Task } from '@serenity-js/core';
+import {
+  AnswersQuestions,
+  Duration,
+  PerformsActivities,
+  Question,
+  QuestionAdapter,
+  Task,
+} from '@serenity-js/core';
 import { contain, Ensure, equals, not } from '@serenity-js/assertions';
 import { GetRequest, LastResponse, Send } from '@serenity-js/rest';
 import {
@@ -66,6 +73,78 @@ export class ViewTheirSentSmsReport {
 /** The report itself: whatever the last `GET sms` returned. No request, so it is safe anywhere. */
 export const TheSentSmsReport = (): QuestionAdapter<SentSmsReportEntry[]> =>
   LastResponse.body<SentSmsReportEntry[]>();
+
+/**
+ * Waits until a message the actor sent has actually reached the carrier.
+ *
+ * **Why a wait is needed at all.** `POST sms` answers `201` once the send is charged, recorded and
+ * published to its dispatch lane — accepted, in other words, not delivered. A worker consuming
+ * that lane hands it to the carrier a moment later and only then does it become `SENT`, which is
+ * the status the report filters on. So there is a real, if brief, window in which a send has
+ * succeeded and the report is legitimately empty.
+ *
+ * This belongs to a `Given`, not to a `Then`. "Ariana **has sent** an SMS" is a completed
+ * precondition, and a precondition is not established until the system has finished acting on it —
+ * the same standard `AddCredit` holds itself to by checking its own `204`. Putting the wait here
+ * rather than in the assertions is what keeps every `Then` in this file a plain, immediate claim
+ * about a report that is already settled, and keeps the feature files free of any hint that
+ * delivery is asynchronous.
+ *
+ * **A hand-written `Task` subclass rather than `Wait.until`,** because the poll has to *re-issue*
+ * the request each time. `Wait.until` re-answers a question, and every question here reads
+ * `LastResponse` — polling one would loop on the same stale body forever. Only a `Task` gets an
+ * actor that can both `attemptsTo` and `answer`; `Question.about` and `Interaction.where` are
+ * handed narrower actors with no `attemptsTo` at all.
+ *
+ * It logs in on each poll rather than caching a token, because `TheirBearerToken` reads the token
+ * off the last login response and any request in between replaces it. Two requests per poll is a
+ * fair price for not putting a token in the shared notepad.
+ */
+export const EnsureTheirSmsHasReachedTheCarrier = (recipient: string): Task =>
+  new WaitUntilTheirSmsHasReachedTheCarrier(recipient);
+
+const howLongToWaitForDelivery = Duration.ofSeconds(20);
+const howOftenToCheckForDelivery = Duration.ofMilliseconds(250);
+
+class WaitUntilTheirSmsHasReachedTheCarrier extends Task {
+  constructor(private readonly recipient: string) {
+    super(
+      `#actor waits until their SMS to ${recipient} has reached the carrier`,
+    );
+  }
+
+  async performAs(actor: PerformsActivities & AnswersQuestions): Promise<void> {
+    const giveUpAt = Date.now() + howLongToWaitForDelivery.inMilliseconds();
+
+    for (;;) {
+      await actor.attemptsTo(
+        LogIn.viaApiUsing(TheirOwnCredentials()),
+        Send.a(
+          GetRequest.to('sms').using({
+            headers: { Authorization: TheirBearerToken() },
+          }),
+        ),
+      );
+
+      const report = await actor.answer(TheSentSmsReport());
+      if (report.some((entry) => entry.recipient === this.recipient)) {
+        return;
+      }
+
+      if (Date.now() >= giveUpAt) {
+        throw new Error(
+          `Expected the SMS to ${this.recipient} to have reached the carrier within ` +
+            `${howLongToWaitForDelivery.toString()}, but the sent SMS report still does not list it. ` +
+            `Is the dispatch worker for its lane running?`,
+        );
+      }
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, howOftenToCheckForDelivery.inMilliseconds()),
+      );
+    }
+  }
+}
 
 const TheRecipientsInTheirReport = (): QuestionAdapter<string[]> =>
   Question.about('the recipients in their sent SMS report', async (actor) =>

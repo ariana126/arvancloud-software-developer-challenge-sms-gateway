@@ -34,10 +34,16 @@ export class OutboxSmsDispatcher extends SmsDispatcher {
    * lives on and is attempted again; there is nobody to propagate to who could
    * do anything better with it.
    *
-   * Clearing the row and marking the message sent are one transaction, so the
+   * Clearing the row and marking the message queued are one transaction, so the
    * two can never disagree. What is *not* in that transaction is the publish
-   * itself, deliberately: holding a transaction open across a call to a carrier
+   * itself, deliberately: holding a transaction open across a call to a broker
    * would keep a row locked for as long as somebody else's network takes.
+   *
+   * **What "success" means here changed when Kafka arrived.** A publish that
+   * returns is a broker acknowledgement, not a delivered message, so this marks
+   * the message `QUEUED` and hands responsibility to the worker consuming that
+   * lane. The outbox's job ends at the point the dispatch became durable
+   * somewhere else — which is exactly the job an outbox has.
    *
    * The consequence is at-least-once delivery — a publish that succeeds and a
    * settle that fails leaves the row to be dispatched again — which is what
@@ -54,21 +60,23 @@ export class OutboxSmsDispatcher extends SmsDispatcher {
     try {
       await this.unitOfWork.execute(async () => {
         await this.outbox.settle(dispatch.id);
-        await this.markSent(dispatch);
+        await this.markQueued(dispatch);
       });
     } catch (error) {
-      // The carrier has the message; only the bookkeeping failed. Left alone,
-      // the claim goes stale and the relay reclaims the row — which is why the
-      // provider is handed an idempotency key.
+      // The broker has the message; only the bookkeeping failed. Left alone,
+      // the claim goes stale and the relay reclaims the row and republishes a
+      // duplicate — which is why delivery is documented as at-least-once and
+      // why `SmsProvider.deliver` is handed the message id as an idempotency
+      // key for a real carrier to de-duplicate on.
       this.logger.error(
-        `Delivered SMS ${dispatch.messageId.asString()} but could not settle its outbox row; it will be retried. ${this.describe(error)}`,
+        `Published SMS ${dispatch.messageId.asString()} to ${dispatch.lane.toString()} but could not settle its outbox row; it will be retried. ${this.describe(error)}`,
       );
     }
   }
 
-  private async markSent(dispatch: SmsDispatch): Promise<void> {
+  private async markQueued(dispatch: SmsDispatch): Promise<void> {
     const message = await this.messages.get(dispatch.messageId);
-    message.markSent();
+    message.markQueued();
     await this.messages.save(message);
   }
 

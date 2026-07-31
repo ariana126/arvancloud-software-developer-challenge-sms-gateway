@@ -32,10 +32,16 @@ module.exports = {
     {
       name: 'domain-no-framework-libs',
       comment:
-        'The domain layer is framework-agnostic business logic — no NestJS or Prisma.',
+        'The domain layer is framework-agnostic business logic — no NestJS, no ' +
+        'Prisma, no broker client. `kafkajs` is on this list for the same reason ' +
+        'the other three are, and it is the one most likely to be reached for by ' +
+        'mistake: `DispatchLane` is about which isolated path a message travels ' +
+        'on, which is a business decision, and it must stay decidable — and ' +
+        'testable — without a broker anywhere near it. Topics are infrastructure ' +
+        'vocabulary and live in infrastructure/kafka/topics.ts.',
       severity: 'error',
       from: { path: '(^|/)domain/' },
-      to: { path: 'node_modules/(@nestjs|@prisma|prisma)' },
+      to: { path: 'node_modules/(@nestjs|@prisma|prisma|kafkajs)' },
     },
     {
       name: 'application-not-infrastructure',

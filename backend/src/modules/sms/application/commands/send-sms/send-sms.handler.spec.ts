@@ -2,6 +2,10 @@ import { CreditLedger } from '@credit/domain/service/credit-ledger';
 import { InsufficientCredit } from '@credit/domain/service/insufficient-credit.exception';
 import { Clock, Identity, UnitOfWork } from '@framework/domain';
 import { InsufficientCreditException } from '@sms/application/exceptions';
+import {
+  SenderTrafficRepository,
+  SenderTrafficSnapshot,
+} from '@sms/domain/service/sender-traffic.repository';
 import { SmsDispatcher } from '@sms/domain/service/sms-dispatcher';
 import { SmsMessageRepository } from '@sms/domain/service/sms-message.repository';
 import {
@@ -9,9 +13,11 @@ import {
   SmsOutboxRepository,
 } from '@sms/domain/service/sms-outbox.repository';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
+import { DispatchLane } from '@sms/domain/value/dispatch-lane';
 import { MessageBody } from '@sms/domain/value/message-body';
 import { PhoneNumber } from '@sms/domain/value/phone-number';
 import { ServiceLevel } from '@sms/domain/value/service-level';
+import { TrafficPolicy } from '@sms/domain/value/traffic-policy';
 
 import { SendSmsCommand } from './send-sms.command';
 import { SendSmsHandler } from './send-sms.handler';
@@ -20,6 +26,9 @@ const SENT_AT = new Date('2026-01-01T00:00:00.000Z');
 const RECIPIENT = '09121234567';
 const BODY = 'Your order has shipped.';
 const COST_PER_SMS = 1000;
+
+/** Two sends a minute is a whale here, so a test can make one in two lines. */
+const POLICY = TrafficPolicy.of(2, 60);
 
 class FakeCreditLedger extends CreditLedger {
   public readonly charges: Array<{ userId: string; amount: number }> = [];
@@ -57,14 +66,24 @@ class FakeSmsMessageRepository extends SmsMessageRepository {
 
 class FakeSmsOutboxRepository extends SmsOutboxRepository {
   public readonly enqueued: SmsMessage[] = [];
+  public readonly lanes: DispatchLane[] = [];
 
-  enqueue(message: SmsMessage): Promise<SmsDispatch> {
+  enqueue(message: SmsMessage, lane: DispatchLane): Promise<SmsDispatch> {
     this.enqueued.push(message);
+    this.lanes.push(lane);
     return Promise.resolve({
       id: `outbox-${this.enqueued.length}`,
       messageId: message.id,
+      senderId: Identity.fromString(
+        (message.toPrimitives() as { senderId: string }).senderId,
+      ),
       recipient: message.getRecipient(),
       body: message.getBody(),
+      serviceLevel: ServiceLevel.fromString(
+        (message.toPrimitives() as { serviceLevel: string }).serviceLevel,
+      ),
+      lane,
+      sentAt: SENT_AT,
       attempts: 1,
     });
   }
@@ -108,6 +127,31 @@ class FakeSmsDispatcher extends SmsDispatcher {
 }
 
 /**
+ * Counts sends per sender in memory, the way the real one does in a single
+ * statement. It never expires a window: a unit test freezes the clock, so every
+ * send in a test lands inside the same window by construction.
+ */
+class FakeSenderTrafficRepository extends SenderTrafficRepository {
+  private readonly counts = new Map<string, number>();
+
+  recordSend(senderId: Identity): Promise<SenderTrafficSnapshot> {
+    const next = (this.counts.get(senderId.asString()) ?? 0) + 1;
+    this.counts.set(senderId.asString(), next);
+    return Promise.resolve({
+      sendCountInWindow: next,
+      windowStartedAt: SENT_AT,
+    });
+  }
+
+  findBySender(senderId: Identity): Promise<SenderTrafficSnapshot> {
+    return Promise.resolve({
+      sendCountInWindow: this.counts.get(senderId.asString()) ?? 0,
+      windowStartedAt: SENT_AT,
+    });
+  }
+}
+
+/**
  * Records the order things happened in, so a test can assert that the charge,
  * the message and the outbox row were all written *before* the commit — the
  * property that makes it impossible to take money without recording what for.
@@ -140,6 +184,7 @@ function makeSut(
   repository: FakeSmsMessageRepository = new FakeSmsMessageRepository(),
   outbox: FakeSmsOutboxRepository = new FakeSmsOutboxRepository(),
   unitOfWork: RecordingUnitOfWork = new RecordingUnitOfWork(),
+  senderTraffic: FakeSenderTrafficRepository = new FakeSenderTrafficRepository(),
 ): {
   sut: SendSmsHandler;
   ledger: FakeCreditLedger;
@@ -147,14 +192,17 @@ function makeSut(
   repository: FakeSmsMessageRepository;
   outbox: FakeSmsOutboxRepository;
   unitOfWork: RecordingUnitOfWork;
+  senderTraffic: FakeSenderTrafficRepository;
 } {
   return {
     sut: new SendSmsHandler(
       ledger,
       repository,
       outbox,
+      senderTraffic,
       dispatcher,
       unitOfWork,
+      POLICY,
       new FixedClock(SENT_AT),
     ),
     ledger,
@@ -162,6 +210,7 @@ function makeSut(
     repository,
     outbox,
     unitOfWork,
+    senderTraffic,
   };
 }
 
@@ -378,6 +427,81 @@ describe('SendSmsHandler', () => {
     expect(ledger.charges).toHaveLength(1);
     expect(repository.saved).toHaveLength(1);
     expect(outbox.enqueued).toHaveLength(1);
+  });
+
+  it('a quiet sender travels on the shared lane, alongside the rest of the long tail', async () => {
+    const { sut, outbox } = makeSut();
+
+    await sut.execute(commandFrom(Identity.new()));
+
+    expect(outbox.lanes[0].toString()).toBe('SHARED');
+  });
+
+  /**
+   * The noisy-neighbour bulkhead, end to end through the handler. Three sends
+   * against a threshold of two: the first two are ordinary traffic and the third
+   * has crossed the line, so it is the one that moves.
+   */
+  it('a sender that crosses the volume threshold is moved off the shared lane', async () => {
+    const senderId = Identity.new();
+    const { sut, outbox } = makeSut();
+
+    await sut.execute(commandFrom(senderId));
+    await sut.execute(commandFrom(senderId));
+    await sut.execute(commandFrom(senderId));
+
+    expect(outbox.lanes.map((lane) => lane.toString())).toEqual([
+      'SHARED',
+      'SHARED',
+      'BULK',
+    ]);
+  });
+
+  /**
+   * Traffic is counted per sender, which is the whole point — one customer's
+   * volume must not reclassify another's.
+   */
+  it("one sender's volume does not move a different sender off the shared lane", async () => {
+    const whale = Identity.new();
+    const cornerShop = Identity.new();
+    const { sut, outbox } = makeSut();
+
+    await sut.execute(commandFrom(whale));
+    await sut.execute(commandFrom(whale));
+    await sut.execute(commandFrom(whale));
+    await sut.execute(commandFrom(cornerShop));
+
+    expect(outbox.lanes[2].toString()).toBe('BULK');
+    expect(outbox.lanes[3].toString()).toBe('SHARED');
+  });
+
+  /**
+   * Service level beats traffic tier. A promise made to a large customer is
+   * worth exactly as much as the same promise made to a small one.
+   */
+  it('an express send from a high-volume sender still travels on the express lane', async () => {
+    const senderId = Identity.new();
+    const { sut, outbox } = makeSut();
+
+    await sut.execute(commandFrom(senderId));
+    await sut.execute(commandFrom(senderId));
+    await sut.execute(commandFrom(senderId, ServiceLevel.express()));
+
+    expect(outbox.lanes[2].toString()).toBe('EXPRESS');
+  });
+
+  /**
+   * A send that never happened must not count against its sender, or a customer
+   * could be classified as high-volume on the strength of rejected messages.
+   */
+  it('a send rejected for short credit is not counted against the sender', async () => {
+    const senderId = Identity.new();
+    const { sut, senderTraffic } = makeSut(shortOn(400));
+
+    await expect(sut.execute(commandFrom(senderId))).rejects.toThrow();
+
+    const traffic = await senderTraffic.findBySender(senderId);
+    expect(traffic.sendCountInWindow).toBe(0);
   });
 
   it('an unexpected ledger failure propagates untranslated', async () => {

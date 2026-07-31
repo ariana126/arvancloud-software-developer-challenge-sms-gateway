@@ -19,6 +19,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { SendSmsCommand } from '@sms/application/commands/send-sms/send-sms.command';
+import { GetSenderTrafficQuery } from '@sms/application/queries/get-sender-traffic/get-sender-traffic.query';
+import { SenderTrafficReadModel } from '@sms/application/queries/get-sender-traffic/sender-traffic.read-model';
 import { GetSentSmsReportQuery } from '@sms/application/queries/get-sent-sms-report/get-sent-sms-report.query';
 import { SentSmsReadModel } from '@sms/application/queries/get-sent-sms-report/sent-sms.read-model';
 import { GetSmsPricingQuery } from '@sms/application/queries/get-sms-pricing/get-sms-pricing.query';
@@ -122,6 +124,52 @@ export class SmsController {
   })
   async pricing(): Promise<SmsPricingReadModel> {
     return this.queryBus.execute(new GetSmsPricingQuery());
+  }
+
+  @Get('traffic')
+  @ApiOperation({
+    summary: "Get how the current user's send rate is currently classified",
+  })
+  @ApiOkResponse({
+    description:
+      "Traffic is carried on isolated paths so that one customer's volume cannot delay another's. This reports which classification the caller falls into and the numbers behind it. A customer that has sent nothing recently reads as SHARED with a count of zero — a new customer and a quiet one are the same customer here.",
+    schema: {
+      properties: {
+        tier: {
+          type: 'string',
+          enum: ['SHARED', 'BULK'],
+          description:
+            'SHARED is the long tail; BULK is a high-volume sender, handled apart from it. BULK is not a lower priority — it is separate capacity.',
+          example: 'SHARED',
+        },
+        sendsInWindow: {
+          type: 'number',
+          description: 'Messages sent inside the window currently open.',
+          example: 12,
+        },
+        windowInSeconds: {
+          type: 'number',
+          description: 'How far back `sendsInWindow` reaches.',
+          example: 60,
+        },
+        bulkThreshold: {
+          type: 'number',
+          description:
+            'The count above which a sender is classified BULK, published so a customer can see it coming.',
+          example: 1000,
+        },
+      },
+      required: ['tier', 'sendsInWindow', 'windowInSeconds', 'bulkThreshold'],
+    },
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Missing or invalid JWT token',
+    schema: JwtUnauthorizedSchema,
+  })
+  async traffic(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<SenderTrafficReadModel> {
+    return this.queryBus.execute(new GetSenderTrafficQuery(user.id));
   }
 
   @Get()

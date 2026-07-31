@@ -7,11 +7,11 @@ import {
   SmsOutboxRepository,
 } from '@sms/domain/service/sms-outbox.repository';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
+import { DispatchLane } from '@sms/domain/value/dispatch-lane';
 import { MessageBody } from '@sms/domain/value/message-body';
 import { PhoneNumber } from '@sms/domain/value/phone-number';
-
-/** What `type` a dispatch row carries — the topic, when there is a broker. */
-const SMS_DISPATCH_REQUESTED = 'sms.dispatch.requested';
+import { ServiceLevel } from '@sms/domain/value/service-level';
+import { laneFor, topicFor } from '@sms/infrastructure/kafka/topics';
 
 /** How long a claim may go unfinished before someone else may take it over. */
 const CLAIM_LEASE_IN_SECONDS = 60;
@@ -34,6 +34,7 @@ interface DispatchPayload {
 
 interface OutboxRow {
   id: string;
+  type: string;
   payload: DispatchPayload;
   attempts: number;
 }
@@ -54,13 +55,22 @@ export class PrismaSmsOutboxRepository extends SmsOutboxRepository {
    * Goes through `client()`, so this lands inside the caller's transaction —
    * the whole point of an outbox is that this row and the charge commit
    * together.
+   *
+   * `type` holds the lane's **topic**, which is what the schema comment always
+   * said it would: the row records where this dispatch is going, so a relay
+   * picking it up after a crash republishes it to the same lane rather than
+   * reclassifying a sender whose traffic has moved on since.
    */
-  async enqueue(message: SmsMessage, now: Date): Promise<SmsDispatch> {
+  async enqueue(
+    message: SmsMessage,
+    lane: DispatchLane,
+    now: Date,
+  ): Promise<SmsDispatch> {
     const payload = this.toPayload(message);
 
     const row = await this.prisma.client().smsOutbox.create({
       data: {
-        type: SMS_DISPATCH_REQUESTED,
+        type: topicFor(lane),
         payload: payload as unknown as Prisma.InputJsonValue,
         status: OUTBOX_STATUS.inFlight,
         attempts: 1,
@@ -70,7 +80,7 @@ export class PrismaSmsOutboxRepository extends SmsOutboxRepository {
       },
     });
 
-    return { id: row.id, ...this.toDispatch(payload), attempts: 1 };
+    return { id: row.id, ...this.toDispatch(payload, lane), attempts: 1 };
   }
 
   /**
@@ -107,12 +117,12 @@ export class PrismaSmsOutboxRepository extends SmsOutboxRepository {
             FOR UPDATE SKIP LOCKED
           LIMIT ${limit}
        )
-      RETURNING id, payload, attempts;
+      RETURNING id, type, payload, attempts;
     `;
 
     return rows.map((row) => ({
       id: row.id,
-      ...this.toDispatch(row.payload),
+      ...this.toDispatch(row.payload, laneFor(row.type)),
       attempts: row.attempts,
     }));
   }
@@ -168,13 +178,25 @@ export class PrismaSmsOutboxRepository extends SmsOutboxRepository {
     };
   }
 
+  /**
+   * The lane comes from the row's `type` rather than from the payload, because
+   * the topic a row was written for is the fact worth trusting — it is where
+   * the message either went or is going. The payload's `serviceLevel` is what
+   * the customer bought, which is a different question and is why both are
+   * carried.
+   */
   private toDispatch(
     payload: DispatchPayload,
+    lane: DispatchLane,
   ): Omit<SmsDispatch, 'id' | 'attempts'> {
     return {
       messageId: Identity.fromString(payload.messageId),
+      senderId: Identity.fromString(payload.senderId),
       recipient: PhoneNumber.fromString(payload.recipient),
       body: MessageBody.fromString(payload.body),
+      serviceLevel: ServiceLevel.fromString(payload.serviceLevel),
+      lane,
+      sentAt: new Date(payload.sentAt),
     };
   }
 }

@@ -24,6 +24,7 @@ import {
 } from '../authentication/log-in';
 import { FreezeTimeAt, theMomentScenariosFreezeTimeAt } from '../common/clock';
 import { AccountNotes } from '../common/notes';
+import { EnsureTheirSmsHasReachedTheCarrier } from '../reporting/sent-sms-report';
 import {
   EnsureAccountCreditIs,
   TheAccountCreditTheyStartedWith,
@@ -147,6 +148,11 @@ export const HaveAlreadySentAnSms = (details: SmsDetails): Task =>
     `#actor has already sent an SMS to ${details.recipient}`,
     StartWithJustEnoughCreditForOneSms(),
     SendAnSms.viaApiUsing(details),
+    // `201` means accepted, not delivered — the send is published to a dispatch lane and a worker
+    // hands it to the carrier a moment later. Until that happens the report is legitimately empty,
+    // so a precondition that stopped at the `201` would leave the scenarios racing it. See
+    // `EnsureTheirSmsHasReachedTheCarrier` for why the wait belongs here and not in a `Then`.
+    EnsureTheirSmsHasReachedTheCarrier(details.recipient),
   );
 
 /**

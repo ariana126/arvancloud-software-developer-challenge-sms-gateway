@@ -56,10 +56,25 @@ export class SmsMessage extends AggregateRoot {
   }
 
   /**
+   * The broker has it. The outbox row has been settled and no further attempt is
+   * owed by this service — but no carrier has seen the message yet, so this is
+   * emphatically not `markSent`.
+   *
+   * Keeping the two apart is what stops the report from claiming delivery it
+   * cannot vouch for. A publish that Kafka acknowledges proves only that the
+   * dispatch is durable and on its lane; the worker consuming that lane is what
+   * eventually calls `markSent`. No event, because "we handed it to ourselves"
+   * is not news to anybody downstream.
+   */
+  public markQueued(): void {
+    this.status = SmsStatus.queued();
+  }
+
+  /**
    * The carrier took it. `SmsSent` is recorded **here** rather than in `queue`,
    * because that is when it becomes true — announcing a send at acceptance time
    * would tell the rest of the system a message went out that might still be
-   * sitting in the outbox.
+   * sitting in the outbox, or on a partition.
    */
   public markSent(): void {
     this.status = SmsStatus.sent();

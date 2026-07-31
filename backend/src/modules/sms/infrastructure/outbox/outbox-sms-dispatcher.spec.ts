@@ -6,6 +6,7 @@ import {
   SmsOutboxRepository,
 } from '@sms/domain/service/sms-outbox.repository';
 import { SmsMessage } from '@sms/domain/sms-message.aggregate';
+import { DispatchLane } from '@sms/domain/value/dispatch-lane';
 import { MessageBody } from '@sms/domain/value/message-body';
 import { PhoneNumber } from '@sms/domain/value/phone-number';
 import { ServiceLevel } from '@sms/domain/value/service-level';
@@ -138,15 +139,21 @@ function makeSut(attempts = 1): {
     dispatch: {
       id: 'outbox-1',
       messageId: message.id,
+      senderId: Identity.fromString(
+        (message.toPrimitives() as { senderId: string }).senderId,
+      ),
       recipient: message.getRecipient(),
       body: message.getBody(),
+      serviceLevel: ServiceLevel.standard(),
+      lane: DispatchLane.shared(),
+      sentAt: NOW,
       attempts,
     },
   };
 }
 
 describe('OutboxSmsDispatcher', () => {
-  it('publishes the dispatch to the carrier', async () => {
+  it('publishes the dispatch to the broker', async () => {
     const { sut, publisher, dispatch } = makeSut();
 
     await sut.dispatch(dispatch);
@@ -154,7 +161,7 @@ describe('OutboxSmsDispatcher', () => {
     expect(publisher.published).toEqual([dispatch]);
   });
 
-  it('clears the outbox row once the carrier has taken it', async () => {
+  it('clears the outbox row once the broker has taken it', async () => {
     const { sut, outbox, dispatch } = makeSut();
 
     await sut.dispatch(dispatch);
@@ -162,18 +169,28 @@ describe('OutboxSmsDispatcher', () => {
     expect(outbox.settled).toEqual(['outbox-1']);
   });
 
-  it('marks the message sent once the carrier has taken it', async () => {
+  /**
+   * The distinction the broker made necessary. A publish that returns means
+   * Kafka acknowledged the dispatch and nothing more — the carrier has not seen
+   * it, so claiming `SENT` here would put messages in the sender's report that
+   * are still sitting on a partition. The worker consuming the lane is what
+   * eventually marks them sent.
+   */
+  it('marks the message queued once the broker has taken it, not sent', async () => {
     const { sut, messages, dispatch } = makeSut();
 
     await sut.dispatch(dispatch);
 
     expect(messages.saved).toHaveLength(1);
-    expect(messages.saved[0].isSent()).toBe(true);
+    expect(messages.saved[0].toPrimitives()).toMatchObject({
+      status: 'QUEUED',
+    });
+    expect(messages.saved[0].isSent()).toBe(false);
   });
 
   it('reschedules a refused dispatch instead of losing it', async () => {
     const { sut, publisher, outbox, dispatch } = makeSut();
-    publisher.failWith(new Error('carrier is unreachable'));
+    publisher.failWith(new Error('broker is unreachable'));
 
     await sut.dispatch(dispatch);
 
@@ -183,11 +200,11 @@ describe('OutboxSmsDispatcher', () => {
 
   it('records why the dispatch was refused, for whoever reads the row', async () => {
     const { sut, publisher, outbox, dispatch } = makeSut();
-    publisher.failWith(new Error('carrier is unreachable'));
+    publisher.failWith(new Error('broker is unreachable'));
 
     await sut.dispatch(dispatch);
 
-    expect(outbox.rescheduled[0].error).toBe('carrier is unreachable');
+    expect(outbox.rescheduled[0].error).toBe('broker is unreachable');
   });
 
   /** 2s, then 4, 8, 16 — long enough to outlast a blip, short enough to matter. */

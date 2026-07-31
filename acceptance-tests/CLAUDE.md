@@ -33,7 +33,7 @@ Start them with `make -C ../backend test-up` and `make -C ../frontend test-up`, 
 ## Which door a step goes through
 
 The suite is **blended** (BDD in Action, ch15): the browser where the browser is the point, HTTP
-everywhere else. Six of the twenty-five examples drive the UI. That ratio is deliberate, not a
+everywhere else. Six of the twenty-eight examples drive the UI. That ratio is deliberate, not a
 staging post — ch10 puts UI tests at "a small minority" of an acceptance suite.
 
 | Scenario                     | Door                       | Why                                                                                                       |
@@ -47,7 +47,8 @@ staging post — ch10 puts UI tests at "a small minority" of an acceptance suite
 | Two sends at the same moment | **API**                    | Not a preference: a person cannot submit one form twice simultaneously, so there is no journey to demonstrate. The rule is about the system, and what the loser is *told* is already covered by the row above |
 | Send express SMS             | **UI**                     | ch10 reason 3: the guaranteed delivery time is only worth something if it is *shown*                        |
 | Increase account credit      | **API**                    | Passive throughout; no screen-specific rule to demonstrate                                                  |
-| Sent SMS report (×2)         | **API**                    | Currently pending — no automation yet                                                                       |
+| Sent SMS report (×2)         | **API**                    | Passive and data-shaped; there is no report screen, and the second scenario's subject is an authorisation rule rather than a rendering one |
+| High-volume senders (×3)     | **API**                    | Passive throughout, and there is no screen for it. What is being demonstrated is how the system classifies traffic, which a customer reads from an endpoint |
 
 **Grammatical voice is the signal.** `Given Ariana already has an account` is passive — we care only
 *that* it is true, so it takes the API. `When he signs up` is active — we are demonstrating *how*,
@@ -309,6 +310,28 @@ ends by waiting for a field to be visible, so `FillInTheSignUpForm` can simply t
 belt-and-braces — the suite flaked exactly here before those waits existed, and only when the
 frontend container was cold enough that Vite still had to compile the identity chunk.
 
+**There is a second kind of wait now, and it is not about rendering.** Sending an SMS is
+asynchronous end to end: `POST sms` answers `201` once the send is charged, recorded and published
+to a dispatch lane, and a separate worker process hands it to the carrier a moment later — only then
+does it become `SENT`, which is the status the report filters on. So there is a real window in which
+a send has succeeded and the report is legitimately empty.
+
+`EnsureTheirSmsHasReachedTheCarrier` closes it, and it lives in **`HaveAlreadySentAnSms` — a
+`Given`, not a `Then`**. "Ariana *has sent* an SMS" is a completed precondition, and a precondition
+is not established until the system has finished acting on it; that is the same standard `AddCredit`
+holds itself to by asserting its own `204`. Keeping it there is what leaves every `Then` a plain,
+immediate claim and keeps the feature files free of any hint that delivery is asynchronous.
+
+It is a hand-written `Task` subclass rather than `Wait.until`, because the poll has to **re-issue**
+the request each time — `Wait.until` re-answers a question, and every question in that file reads
+`LastResponse`, so polling one would loop on the same stale body forever. Worth knowing generally:
+**only a `Task` is handed an actor that can both `attemptsTo` and `answer`.** `Question.about` gets
+`AnswersQuestions & UsesAbilities` and `Interaction.where` gets
+`UsesAbilities & AnswersQuestions & CollectsArtifacts` — neither has `attemptsTo`, and reaching for
+one of those when you need a dynamic sequence of activities fails at compile time.
+`SendEnoughSmsToCrossTheHighVolumeThreshold` is the other instance, for the other reason: how many
+sends it makes is not known until it has read the threshold.
+
 **The two locate tasks are not symmetric, and `LogIn.using` cannot open a scenario.**
 `LocateTheSignUpForm` navigates; `LocateTheLoginForm` does not — it clicks the header's "Log in"
 link on whatever page is already open, which is what a returning visitor actually does. A scenario
@@ -378,6 +401,13 @@ The parameter types (`support/parameter-types.ts`):
 | `{actorName}` | `Ariana` | the plain string — no actor, no spotlight change |
 | `{pronoun}` | `he`, `she`, `they` | `actorInTheSpotlight()` |
 | `{field}` | `email`, `password`, `first name`, `last name` | the payload key (`firstName`, `lastName`) |
+| `{trafficClassification}` | `shares capacity with other senders`, `is given capacity of its own` | the phrase itself; `sender-traffic.ts` maps it to the API's `SHARED` / `BULK` |
+
+That last one keeps the wire codes out of the Gherkin deliberately. A feature file saying "BULK"
+would be describing an enum rather than a business rule, and the enum is not the promise — being
+carried separately is. The threshold is kept out for the same reason and one more: it is
+configuration the test stack sets far below production's, so the suite reads it from
+`GET sms/traffic` rather than writing a number down.
 
 ## Environment
 

@@ -53,3 +53,28 @@ model SmsOutbox {
   @@index([status, nextAttemptAt])
   @@map("sms_outbox")
 }
+
+/// How much traffic a sender has offered recently — the input to which dispatch
+/// lane its messages travel on, and the whole of this system's answer to
+/// "customers do not send at the same rate".
+///
+/// One row per sender, counting sends in a rolling window rather than keeping a
+/// history: the question is only ever "is this sender busy *now*", and a row
+/// that answers it in place needs no retention policy and no aggregation.
+///
+/// The tier is deliberately **not** stored. It is derived from `sendCount`
+/// against a threshold that is configuration, so changing the threshold
+/// reclassifies everyone at once instead of leaving a table of stale verdicts
+/// behind — the same reason `sms_message` has no guaranteed-delivery column.
+model SmsSenderTraffic {
+  senderId String @id @map("sender_id")
+
+  /// When the current window opened. A window whose start has aged past the
+  /// configured length is not expired by a sweeper — the next send rolls it
+  /// over in the same statement that counts itself, so an idle sender's stale
+  /// row costs nothing and needs nobody to tidy it.
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  sendCount       Int      @default(0) @map("send_count")
+
+  @@map("sms_sender_traffic")
+}

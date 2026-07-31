@@ -1,6 +1,26 @@
 name: nmk-backend-test
 
+# Still the same image and the same topology as the dev stack — this file names
+# a second Compose project and swaps the env file, nothing more. What it can no
+# longer do is say that once: `env_file` is per service, and there are now four
+# services that read one.
+#
+# Everything else follows from the project name. `db` and `kafka` get their own
+# volumes, their own network and their own published ports (resolved from
+# `.env.test`), so the two stacks never meet.
 services:
   app:
+    env_file:
+      - .env.test
+
+  worker-express:
+    env_file:
+      - .env.test
+
+  worker-bulk:
+    env_file:
+      - .env.test
+
+  worker-shared:
     env_file:
       - .env.test

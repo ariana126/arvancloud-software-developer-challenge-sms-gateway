@@ -6,9 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A monorepo of independent projects, each with its own Makefile, Docker Compose stack, and CLAUDE.md:
 
-- **`backend/`** — NestJS + Prisma + Postgres API (DDD + CQRS). Two Compose projects, both `app` + `db`:
-  `nmk-backend` (development, ports 3000/5432) and `nmk-backend-test` (`NODE_ENV=test`, ports 3001/5433).
+- **`backend/`** — NestJS + Prisma + Postgres + Kafka API (DDD + CQRS). Two Compose projects, both
+  six services — `app`, `db`, `kafka`, and one SMS dispatch worker per lane (`worker-express`,
+  `worker-bulk`, `worker-shared`): `nmk-backend` (development, ports 3000/5432/9092) and
+  `nmk-backend-test` (`NODE_ENV=test`, ports 3001/5433/9094).
   `make up` starts both; the test stack is what the acceptance suite drives.
+  The workers are separate containers on purpose — that separation *is* how one customer's backlog
+  is kept from delaying another's, and how the express delivery guarantee is kept. See
+  `backend/src/modules/sms/CLAUDE.md`.
 - **`frontend/`** — Angular app (Vitest + jsdom, ESLint, Prettier). Two Compose projects, both a
   single `app` service: `nmk-frontend` (development, port 4200, proxying `/api` to the dev backend
   on 3000) and `nmk-frontend-test` (port 4201, proxying to the backend **test** stack on 3001).
@@ -128,9 +133,9 @@ step now fails the run rather than merely covering less. `test-up` rather than `
 that browser at the same backend the suite truncates between scenarios, instead of at the
 developer's dev stack.
 
-The suite is **blended**: six of its twenty-five examples drive the UI — the sign-up journey, the
+The suite is **blended**: six of its twenty-eight examples drive the UI — the sign-up journey, the
 duplicate-email rejection, the three send-SMS scenarios and the express send — and the remaining
-nineteen stay black-box HTTP against the backend. That
+twenty-two stay black-box HTTP against the backend. That
 split follows _BDD in Action_ ch10's four reasons to write a UI test, and the feature file itself
 knows nothing about it: each step's grammatical voice decides which door it goes through, so there
 are no `@ui`/`@api` tags to keep in sync. `acceptance-tests/CLAUDE.md` has the table and the
